@@ -10,17 +10,12 @@ JetBrains 离线激活本地服务器
 
 端点：
     GET  /                              → 浏览器返回操作面板；PowerShell/curl 返回激活脚本（快捷运行，无 BOM）
-    GET  /activate                      → 返回免交互激活脚本（PowerShell 客户端 → .ps1，其它 → .sh）
-    GET  /debug                         → 返回 Debug 模式脚本
-    GET  /uninstall                     → 返回卸载脚本
-    GET  /export/<name>                 → 导出单个脚本（.ps1 保留 UTF-8 BOM，便于 PS 5.1 解析保存的文件）
-    GET  /scripts.zip                   → 一次性导出各平台全部脚本（zip）
+    GET  /export/<name>                 → 导出单个脚本（.ps1 保留 UTF-8 BOM，便于 PS 5.1 解析保存的文件；.cmd 为 GBK 编码）
     GET  /ja-netfilter/<path>           → 返回 ja-netfilter 资源文件
     POST /generateLicense/file          → 生成并返回 .key 许可证文件
 """
 
 import http.server
-import io
 import json
 import os
 import sys
@@ -30,7 +25,6 @@ import time
 import argparse
 import base64
 import hashlib
-import zipfile
 from datetime import datetime
 
 # ===================== 配置 =====================
@@ -294,26 +288,13 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
             f'irm {local_base}/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1'.encode())
         return content
 
-    @staticmethod
-    def _rewrite_offline(content, local_base):
-        """改写免交互激活脚本：把默认服务器地址替换为客户端可访问的地址。"""
-        content = content.replace(
-            b'[string]$Server = "http://localhost:10768"',
-            f'[string]$Server = "{local_base}"'.encode())
-        content = content.replace(
-            b'SERVER="${1:-http://localhost:10768}"',
-            f'SERVER="${{1:-{local_base}}}"'.encode())
-        return content
-
-    def _read_rewritten(self, filepath, offline):
+    def _read_rewritten(self, filepath):
         """读取脚本并做 URL 改写；文件缺失返回 None。"""
         if not (os.path.exists(filepath) and os.path.isfile(filepath)):
             return None
         with open(filepath, "rb") as f:
             content = f.read()
         local_base = self._local_base()
-        if offline:
-            return self._rewrite_offline(content, local_base)
         return self._rewrite_script(content, local_base)
 
     @staticmethod
@@ -326,7 +307,7 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
 
     def _send_script(self, filepath):
         """发送激活脚本（快捷运行，无 BOM）—— bash/PowerShell 均可直接管道执行"""
-        content = self._read_rewritten(filepath, offline=False)
+        content = self._read_rewritten(filepath)
         if content is None:
             self.send_response(404)
             self.send_header("Content-Type", "text/plain")
@@ -344,33 +325,10 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(content)
         print(f"  → 200 OK ({len(content)} bytes) - script (URLs rewritten to {local_base})")
 
-    def _send_offline_script(self, filepath):
-        """发送免交互激活脚本（快捷运行，无 BOM）"""
-        content = self._read_rewritten(filepath, offline=True)
-        if content is None:
-            self.send_response(404)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"Script not found")
-            print(f"  → 404 Not Found - {filepath}")
-            return
-
-        content = self._strip_bom(content)
-        local_base = self._local_base()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", len(content))
-        self.end_headers()
-        self.wfile.write(content)
-        print(f"  → 200 OK ({len(content)} bytes) - offline script (URLs rewritten to {local_base})")
-
     _EXPORT_FILES = {
-        "activate.ps1":         ("Windows/activate.ps1", False, True),
-        "offline_activate.ps1": ("Windows/offline_activate.ps1", True, True),
-        "activate.sh":          ("Linux-macOS/activate.sh", False, False),
-        "offline_activate.sh":  ("Linux-macOS/offline_activate.sh", True, False),
-        "debug.sh":             ("Linux-macOS/debug.sh", False, False),
-        "uninstall.sh":         ("Linux-macOS/uninstall.sh", False, False),
+        "activate.ps1":          ("Windows/activate.ps1", True),
+        "one-click-activate.cmd": ("Windows/one-click-activate.cmd", False),
+        "activate.sh":           ("Linux-macOS/activate.sh", False),
     }
 
     def _send_export(self, name):
@@ -384,8 +342,8 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
             print(f"  → 404 Not Found - export/{name}")
             return
 
-        disk_name, offline, is_ps = entry
-        content = self._read_rewritten(os.path.join(SCRIPTS_DIR, disk_name), offline)
+        disk_name, is_ps = entry
+        content = self._read_rewritten(os.path.join(SCRIPTS_DIR, disk_name))
         if content is None:
             self.send_response(404)
             self.send_header("Content-Type", "text/plain")
@@ -403,56 +361,6 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
         print(f"  → 200 OK ({len(content)} bytes) - export/{name}")
-
-    def _send_zip(self):
-        """一次性导出各平台全部脚本（zip）：.ps1 保留 BOM，全部改写为本机服务器地址。"""
-        local_base = self._local_base()
-        entries = [
-            ("Windows/activate.ps1", "Windows/activate.ps1", False, True),
-            ("Windows/offline_activate.ps1", "Windows/offline_activate.ps1", True, True),
-            ("Linux-macOS/activate.sh", "Linux-macOS/activate.sh", False, False),
-            ("Linux-macOS/offline_activate.sh", "Linux-macOS/offline_activate.sh", True, False),
-            ("Linux-macOS/debug.sh", "Linux-macOS/debug.sh", False, False),
-            ("Linux-macOS/uninstall.sh", "Linux-macOS/uninstall.sh", False, False),
-        ]
-        readme = (
-            "JetBrains 离线激活脚本包（本地服务器 %s）\n"
-            "\n"
-            "Windows PowerShell（管理员）：\n"
-            "  快捷运行    irm %s | iex\n"
-            "  导出运行    irm %s/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1\n"
-            "  免交互激活  irm %s/export/offline_activate.ps1 -OutFile offline_activate.ps1; .\\offline_activate.ps1\n"
-            "\n"
-            "Linux / macOS 终端：\n"
-            "  快捷运行    curl -Ls %s | bash\n"
-            "  导出运行    curl -Ls %s/export/activate.sh -o activate.sh && bash activate.sh\n"
-            "  免交互激活  curl -Ls %s/export/offline_activate.sh -o offline_activate.sh && bash offline_activate.sh\n"
-            "  调试脚本    bash debug.sh\n"
-            "  卸载脚本    bash uninstall.sh\n"
-            "\n"
-            "免交互激活可用参数：[服务器地址] [许可证名称] [过期日期]\n"
-            "  bash offline_activate.sh http://192.168.1.5:10768 MyName 2099-12-31\n"
-        ) % (local_base, local_base, local_base, local_base,
-             local_base, local_base, local_base)
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("使用说明.txt", readme.encode("utf-8"))
-            for arc, disk, offline, is_ps in entries:
-                content = self._read_rewritten(os.path.join(SCRIPTS_DIR, disk), offline)
-                if content is None:
-                    continue
-                if is_ps and not content.startswith(b"\xef\xbb\xbf"):
-                    content = b"\xef\xbb\xbf" + content
-                zf.writestr(arc, content)
-
-        data = buf.getvalue()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/zip")
-        self.send_header("Content-Disposition", 'attachment; filename="jetbrains-scripts.zip"')
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-        print(f"  → 200 OK ({len(data)} bytes) - scripts.zip")
 
     def _generate_license(self):
         """处理许可证生成请求"""
@@ -529,24 +437,6 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
                 script = os.path.join(SCRIPTS_UNIX_DIR, "activate.sh")
             self._send_script(script)
 
-        elif path == "/debug":
-            self._send_script(os.path.join(SCRIPTS_UNIX_DIR, "debug.sh"))
-
-        elif path == "/uninstall":
-            self._send_script(os.path.join(SCRIPTS_UNIX_DIR, "uninstall.sh"))
-
-        elif path == "/activate":
-            # 免交互激活脚本：PowerShell/Windows → .ps1，macOS/Linux → .sh
-            ua = self.headers.get("User-Agent", "").lower()
-            if "powershell" in ua or "windowspowershell" in ua or "windows" in ua:
-                script = os.path.join(SCRIPTS_WIN_DIR, "offline_activate.ps1")
-            else:
-                script = os.path.join(SCRIPTS_UNIX_DIR, "offline_activate.sh")
-            self._send_offline_script(script)
-
-        elif path == "/scripts.zip":
-            self._send_zip()
-
         elif path.startswith("/export/"):
             self._send_export(path[len("/export/"):])
 
@@ -577,7 +467,7 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(404)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Not found. Available: / /activate /debug /uninstall /export/<name> /scripts.zip /ja-netfilter/*")
+            self.wfile.write(b"Not found. Available: / /export/<name> /ja-netfilter/*")
 
     def _generate_license_text(self, body_data):
         """
@@ -758,12 +648,6 @@ def main():
 
 导出为本地脚本 (Windows PowerShell):
     irm http://localhost:10768/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1
-
-免交互激活 (Linux/Mac):
-    curl -Ls http://localhost:10768/export/offline_activate.sh -o offline_activate.sh && bash offline_activate.sh
-
-一次性导出各平台全部脚本:
-    curl -Ls http://localhost:10768/scripts.zip -o jetbrains-scripts.zip
         """
     )
     parser.add_argument("--host", default=DEFAULT_HOST,
@@ -821,11 +705,7 @@ def main():
     print()
     print("  可用端点:")
     print(f"    GET  http://{args.host}:{args.port}/")
-    print(f"    GET  http://{args.host}:{args.port}/debug")
-    print(f"    GET  http://{args.host}:{args.port}/uninstall")
-    print(f"    GET  http://{args.host}:{args.port}/activate")
     print(f"    GET  http://{args.host}:{args.port}/export/<name>")
-    print(f"    GET  http://{args.host}:{args.port}/scripts.zip")
     print(f"    POST http://{args.host}:{args.port}/generateLicense/file")
     print(f"    GET  http://{args.host}:{args.port}/ja-netfilter/<path>")
     print()
@@ -838,10 +718,8 @@ def main():
     print(f"    curl -Ls http://{args.host}:{args.port}/export/activate.sh -o activate.sh && bash activate.sh")
     print(f"    # 导出为本地脚本 Windows PowerShell:")
     print(f"    irm http://{args.host}:{args.port}/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1")
-    print(f"    # 免交互激活 (Linux/Mac):")
-    print(f"    curl -Ls http://{args.host}:{args.port}/export/offline_activate.sh -o offline_activate.sh && bash offline_activate.sh")
-    print(f"    # 一次性导出各平台全部脚本:")
-    print(f"    curl -Ls http://{args.host}:{args.port}/scripts.zip -o jetbrains-scripts.zip")
+    print(f"    # 导出为本地脚本 Windows CMD:")
+    print(f"    curl -Ls http://{args.host}:{args.port}/export/one-click-activate.cmd -o one-click-activate.cmd && one-click-activate.cmd")
     print()
     print("  按 Ctrl+C 停止服务器")
     print("=" * 60)

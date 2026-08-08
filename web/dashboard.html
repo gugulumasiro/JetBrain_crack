@@ -125,8 +125,6 @@
 
   .sec-hint { color: var(--sub); font-size: .82rem; margin: -6px 0 10px; }
   .sec-hint strong { color: var(--yellow); }
-  .export-bar { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; }
-  .export-bar span { color: var(--sub); font-size: .78rem; flex: 1; min-width: 260px; }
 
   .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--green); color: #1e1e2e; padding: 10px 24px; border-radius: 8px; font-weight: 600; font-size: .85rem; z-index: 999; opacity: 0; transition: opacity .2s; }
   .toast.show { opacity: 1; }
@@ -219,9 +217,6 @@
       <div class="mode">导出为本地脚本（保存后运行）:</div>
       <code id="cmdWinFile"></code>
       <button class="copy small" onclick="copyCmd('cmdWinFile')">复制命令</button>
-      <div class="mode">免交互批量激活本机全部 IDE:</div>
-      <code id="cmdWinOff"></code>
-      <button class="copy small" onclick="copyCmd('cmdWinOff')">复制命令</button>
     </div>
     <div class="cmd-item">
       <div class="label">🐧 Linux / 🍎 macOS 终端</div>
@@ -231,14 +226,7 @@
       <div class="mode">导出为本地脚本（保存后运行）:</div>
       <code id="cmdUnixFile"></code>
       <button class="copy small" onclick="copyCmd('cmdUnixFile')">复制命令</button>
-      <div class="mode">免交互批量激活本机全部 IDE:</div>
-      <code id="cmdUnixOff"></code>
-      <button class="copy small" onclick="copyCmd('cmdUnixOff')">复制命令</button>
     </div>
-  </div>
-  <div class="export-bar">
-    <button class="secondary" onclick="downloadAll()">⬇ 一次性导出各平台脚本 (zip)</button>
-    <span>包含 activate / offline_activate / debug / uninstall 共 6 个脚本，均已改写为本机服务器地址，.ps1 保留 UTF-8 BOM。</span>
   </div>
 </main>
 
@@ -389,20 +377,8 @@ function updateCommands() {
   server = server.replace(/\/+$/, '');
   document.getElementById('cmdWinRun').textContent = 'irm ' + server + ' | iex';
   document.getElementById('cmdWinFile').textContent = 'irm ' + server + '/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1';
-  document.getElementById('cmdWinOff').textContent = 'irm ' + server + '/export/offline_activate.ps1 -OutFile offline_activate.ps1; .\\offline_activate.ps1';
   document.getElementById('cmdUnixRun').textContent = 'curl -Ls ' + server + ' | bash';
   document.getElementById('cmdUnixFile').textContent = 'curl -Ls ' + server + '/export/activate.sh -o activate.sh && bash activate.sh';
-  document.getElementById('cmdUnixOff').textContent = 'curl -Ls ' + server + '/export/offline_activate.sh -o offline_activate.sh && bash offline_activate.sh';
-}
-
-function downloadAll() {
-  var server = document.getElementById('serverUrl').value.trim() || 'http://localhost:10768';
-  server = server.replace(/\/+$/, '');
-  var a = document.createElement('a');
-  a.href = server + '/scripts.zip';
-  a.download = 'jetbrains-scripts.zip';
-  document.body.appendChild(a); a.click(); a.remove();
-  toast('✅ 正在下载 jetbrains-scripts.zip');
 }
 
 document.getElementById('serverUrl').addEventListener('input', updateCommands);

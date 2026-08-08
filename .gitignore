@@ -26,7 +26,7 @@ dist/
 Thumbs.db
 Desktop.ini
 
-# ---- 本地签名密钥（不入库，运行 python server/regenerate_keys.py 生成） ----
+# ---- 本地签名密钥（不入库，运行 python scripts/generate_keys.py 生成） ----
 /keys/
 
 # ---- 日志 / 临时文件 ----

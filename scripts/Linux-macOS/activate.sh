@@ -386,6 +386,14 @@ init_i18n_strings() {
     # dir_not_found
     dir_not_found_zh="未找到{0}目录"
     dir_not_found_en="Directory {0} not found"
+
+    # offline_requires_repo
+    offline_requires_repo_zh="已指定 --offline，但未定位到仓库（缺少 ja-netfilter/ 与 server/generate_license.py）！请到仓库内运行或改用环境变量指定离线资源。"
+    offline_requires_repo_en="-offline specified but the repo was not found (missing ja-netfilter/ and server/generate_license.py)! Run inside the repo or set the OFFLINE_* env vars instead."
+
+    # python_not_found
+    python_not_found_zh="未找到 Python（需要 3.8+），离线模式需要 Python 生成本地许可证！"
+    python_not_found_en="Python 3.8+ not found; offline mode requires Python to generate local licenses!"
 }
 
 # 获取国际化字符串
@@ -428,6 +436,15 @@ ENABLE_COLOR=true
 URL_BASE="http://localhost:10768"
 URL_DOWNLOAD="${URL_BASE}/ja-netfilter"
 URL_LICENSE="${URL_BASE}/generateLicense/file"
+
+# 离线模式。判定优先级：显式环境变量 > --offline 参数 > 自动检测仓库位置。
+#   OFFLINE_RESOURCES_DIR  仓库内 ja-netfilter/ 目录，资源改从本地复制而非 HTTP
+#   OFFLINE_LICENSE_CMD    python 可执行程序
+#   OFFLINE_LICENSE_SCRIPT 离线许可证生成器 server/generate_license.py
+# 自动检测与 --offline 参数解析在下方“离线模式解析”执行（需等 error 函数定义完成）。
+OFFLINE_RESOURCES_DIR="${OFFLINE_RESOURCES_DIR:-}"
+OFFLINE_LICENSE_CMD="${OFFLINE_LICENSE_CMD:-}"
+OFFLINE_LICENSE_SCRIPT="${OFFLINE_LICENSE_SCRIPT:-}"
 
 # 获取原始用户和家目录
 if [ "$(id -u)" -eq 0 ] && [ -n "$SUDO_USER" ]; then
@@ -861,7 +878,18 @@ download_one_file() {
     local url="$1"
     local file_save_path="$2"
     debug "download_progress" "${url}" "${file_save_path}"
-    curl -s -o "${file_save_path}" "${url}"
+
+    if [[ "${url}" == file://* ]]; then
+        # 离线模式：从本地 ja-netfilter 目录复制
+        local src="${url#file://}"
+        if [ ! -f "${src}" ]; then
+            error "dir_not_found" "$(dirname "${src}")"
+            exit 1
+        fi
+        cp "${src}" "${file_save_path}"
+    else
+        curl -s -o "${file_save_path}" "${url}"
+    fi
 
     if [ $? -ne 0 ]; then
         error "download_failed" "${url}"
@@ -899,21 +927,30 @@ progress_bar() {
 }
 
 do_download_resources() {
-    local resources=(
-        "${URL_DOWNLOAD}/ja-netfilter.jar|${file_netfilter_jar}"
-        "${URL_DOWNLOAD}/config/dns.conf|${dir_config}/dns.conf"
-        "${URL_DOWNLOAD}/config/env.conf|${dir_config}/env.conf"
-        "${URL_DOWNLOAD}/config/native.conf|${dir_config}/native.conf"
-        "${URL_DOWNLOAD}/config/power.conf|${dir_config}/power.conf"
-        "${URL_DOWNLOAD}/config/url.conf|${dir_config}/url.conf"
+    local src_prefix="${URL_DOWNLOAD}"
+    if [ -n "${OFFLINE_RESOURCES_DIR}" ]; then
+        src_prefix="file://${OFFLINE_RESOURCES_DIR}"
+        if [ ! -d "${OFFLINE_RESOURCES_DIR}" ]; then
+            error "dir_not_found" "${OFFLINE_RESOURCES_DIR}"
+            exit 1
+        fi
+    fi
 
-        "${URL_DOWNLOAD}/plugins/dns.jar|${dir_plugins}/dns.jar"
-        "${URL_DOWNLOAD}/plugins/env.jar|${dir_plugins}/env.jar"
-        "${URL_DOWNLOAD}/plugins/native.jar|${dir_plugins}/native.jar"
-        "${URL_DOWNLOAD}/plugins/power.jar|${dir_plugins}/power.jar"
-        "${URL_DOWNLOAD}/plugins/url.jar|${dir_plugins}/url.jar"
-        "${URL_DOWNLOAD}/plugins/hideme.jar|${dir_plugins}/hideme.jar"
-        "${URL_DOWNLOAD}/plugins/privacy.jar|${dir_plugins}/privacy.jar"
+    local resources=(
+        "${src_prefix}/ja-netfilter.jar|${file_netfilter_jar}"
+        "${src_prefix}/config/dns.conf|${dir_config}/dns.conf"
+        "${src_prefix}/config/env.conf|${dir_config}/env.conf"
+        "${src_prefix}/config/native.conf|${dir_config}/native.conf"
+        "${src_prefix}/config/power.conf|${dir_config}/power.conf"
+        "${src_prefix}/config/url.conf|${dir_config}/url.conf"
+
+        "${src_prefix}/plugins/dns.jar|${dir_plugins}/dns.jar"
+        "${src_prefix}/plugins/env.jar|${dir_plugins}/env.jar"
+        "${src_prefix}/plugins/native.jar|${dir_plugins}/native.jar"
+        "${src_prefix}/plugins/power.jar|${dir_plugins}/power.jar"
+        "${src_prefix}/plugins/url.jar|${dir_plugins}/url.jar"
+        "${src_prefix}/plugins/hideme.jar|${dir_plugins}/hideme.jar"
+        "${src_prefix}/plugins/privacy.jar|${dir_plugins}/privacy.jar"
     )
 
     local total_files=${#resources[@]}
@@ -1013,13 +1050,27 @@ generate_license() {
     [ -f "$file_license" ] && rm -f "$file_license"
 
     local json_body=$(jq --arg code "$obj_product_code" '.productCode = $code' <<< "$LICENSE_JSON")
-    debug "url_license_params" "$URL_LICENSE" "$json_body" "$file_license"
-    curl -s -X POST "$URL_LICENSE" \
-        -H "Content-Type: application/json" \
-        -d "$json_body" \
-        -o "$file_license" > /dev/null
 
-    if [ $? -eq 0 ]; then
+    local rc
+    if [ -n "${OFFLINE_LICENSE_CMD}" ] && [ -n "${OFFLINE_LICENSE_SCRIPT}" ]; then
+        # 离线模式：调用本地许可证生成器（不启动服务器）
+        "${OFFLINE_LICENSE_CMD}" "${OFFLINE_LICENSE_SCRIPT}" \
+            --product-code "$(jq -r '.productCode' <<< "${json_body}")" \
+            --license-name "$(jq -r '.licenseName' <<< "${json_body}")" \
+            --expiry "$(jq -r '.expiryDate' <<< "${json_body}")" \
+            --assignee "$(jq -r '.assigneeName' <<< "${json_body}")" \
+            -o "${file_license}"
+        rc=$?
+    else
+        debug "url_license_params" "$URL_LICENSE" "$json_body" "$file_license"
+        curl -s -X POST "$URL_LICENSE" \
+            -H "Content-Type: application/json" \
+            -d "$json_body" \
+            -o "$file_license" > /dev/null
+        rc=$?
+    fi
+
+    if [ ${rc} -eq 0 ]; then
         success "activation_success" "$dir_product_name"
     else
         warning "manual_activation_required" "$dir_product_name"
@@ -1097,6 +1148,48 @@ handle_jetbrains_dir() {
     generate_license "$obj_product_name" "$obj_product_code" "$dir_product_name"
 }
 
+# ============ 离线模式解析 =============
+# 离线优先级：显式环境变量 > --offline 参数 > 自动检测仓库位置。
+# 自动检测：脚本位于仓库 scripts/Linux-macOS/ 时，其上级两级即仓库根目录。
+OFFLINE_FROM_REPO=false
+OFFLINE_ARG=false
+for offline_arg in "$@"; do
+    case "$offline_arg" in
+        --offline|-offline) OFFLINE_ARG=true ;;
+    esac
+done
+
+if [ -z "${OFFLINE_RESOURCES_DIR}" ]; then
+    OFFLINE_SCRIPT_DIR=""
+    # BASH_SOURCE 在 curl | bash 管道下不可靠（为 - 或 bash），需 -f 守卫
+    if [ -n "${BASH_SOURCE[0]}" ] && [ "${BASH_SOURCE[0]}" != "-" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+        OFFLINE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+    fi
+    if [ -n "${OFFLINE_SCRIPT_DIR}" ] &&
+       [ -d "${OFFLINE_SCRIPT_DIR}/../../ja-netfilter" ] &&
+       [ -f "${OFFLINE_SCRIPT_DIR}/../../server/generate_license.py" ]; then
+        OFFLINE_RESOURCES_DIR="${OFFLINE_SCRIPT_DIR}/../../ja-netfilter"
+        OFFLINE_LICENSE_SCRIPT="${OFFLINE_SCRIPT_DIR}/../../server/generate_license.py"
+        OFFLINE_FROM_REPO=true
+    elif [ "${OFFLINE_ARG}" = true ]; then
+        error "offline_requires_repo"
+        exit 1
+    fi
+fi
+
+if [ -n "${OFFLINE_RESOURCES_DIR}" ] && [ -z "${OFFLINE_LICENSE_CMD}" ]; then
+    # 离线需本地 Python 生成许可证
+    if command -v python3 >/dev/null 2>&1; then
+        OFFLINE_LICENSE_CMD="$(command -v python3)"
+    elif command -v python >/dev/null 2>&1; then
+        OFFLINE_LICENSE_CMD="$(command -v python)"
+    else
+        error "python_not_found"
+        exit 1
+    fi
+fi
+unset OFFLINE_SCRIPT_DIR
+
 # ============ 主流程 =============
 main() {
     clear
@@ -1140,5 +1233,7 @@ main() {
 }
 
 main "$@"
-# 删除自己
-rm -f "${BASH_SOURCE[0]}"
+# 删除自己（仓库自动检测运行时保留仓库内脚本，避免误删；临时副本 / 管道运行仍会自删）
+if [ "${OFFLINE_FROM_REPO}" != "true" ]; then
+    rm -f "${BASH_SOURCE[0]}"
+fi

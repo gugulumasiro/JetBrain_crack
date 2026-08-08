@@ -6,8 +6,8 @@ keys/ 已在 .gitignore 中排除、不入库。克隆仓库后首次使用前�
 即可生成私钥/证书并让 power.conf 与当前证书严格匹配；已有密钥需要更换时用 --force。
 
 用法：
-    python server/regenerate_keys.py          # 补齐缺失的密钥/证书，并校准 power.conf
-    python server/regenerate_keys.py --force  # 忽略已有文件，全新生成一套
+    python scripts/generate_keys.py          # 补齐缺失的密钥/证书，并校准 power.conf
+    python scripts/generate_keys.py --force  # 忽略已有文件，全新生成一套
 """
 
 import argparse

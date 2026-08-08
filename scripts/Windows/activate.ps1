@@ -5,6 +5,15 @@ Clear-Host
 
 $script:enable_debug = $false
 
+# -Offline 参数：强制离线模式（仓库缺失时报错）。
+# 不用 param 块，保证 `irm | iex` 管道方式仍能正常运行。
+$script:offline_force = $false
+foreach ($offline_flag_arg in $args) {
+    if ($offline_flag_arg -in @('-Offline', '-offline', '--offline', '/Offline')) {
+        $script:offline_force = $true
+    }
+}
+
 try {
     $system_ui_language = (Get-UICulture).Name
     if ($system_ui_language -like "zh*" -or $system_ui_language -like "zh-*") {
@@ -14,6 +23,21 @@ try {
     }
 } catch {
     $script:language = "zh"
+}
+
+# 定位 Python（离线模式生成本地许可证需要）。顺序：py -3 → python → python3
+function Find-Python
+{
+    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyLauncher) {
+        try { $exe = (& py -3 -c 'import sys; print(sys.executable)' 2>$null).Trim() } catch { $exe = $null }
+        if ($exe -and (Test-Path -LiteralPath $exe)) { return $exe }
+    }
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCmd -and (Test-Path -LiteralPath $pythonCmd.Source)) { return $pythonCmd.Source }
+    $python3Cmd = Get-Command python3 -ErrorAction SilentlyContinue
+    if ($python3Cmd -and (Test-Path -LiteralPath $python3Cmd.Source)) { return $python3Cmd.Source }
+    return $null
 }
 
 # Internationalization function
@@ -223,6 +247,14 @@ function Get-i18nString
         "request_fail" = @{
             "zh" = "请求失败: {0}"
             "en" = "Request failed: {0}"
+        }
+        "offline_requires_repo" = @{
+            "zh" = "已指定 -Offline，但未定位到仓库（缺少 ja-netfilter/ 与 server\generate_license.py）！请到仓库内运行或改用环境变量指定离线资源。"
+            "en" = "-Offline specified but the repo was not found (missing ja-netfilter/ and server\generate_license.py)! Run inside the repo or set the OFFLINE_* env vars instead."
+        }
+        "python_not_found" = @{
+            "zh" = "未找到 Python（需要 3.8+），离线模式需要 Python 生成本地许可证！"
+            "en" = "Python 3.8+ not found; offline mode requires Python to generate local licenses!"
         }
     }
 
@@ -532,7 +564,8 @@ function File_Download
         @{ url = "$script:url_download/plugins/privacy.jar"; save_path = [IO.Path]::Combine($script:dir_plugins, "privacy.jar") }
     )
 
-    $obj_http_client = Get-HttP_Client
+    $obj_http_client = $null
+    if (-not $script:offline) { $obj_http_client = Get-HttP_Client }
     $total_files = $files.Count
     $current_file = 0
 
@@ -552,10 +585,27 @@ function File_Download
 
         try
         {
-            $response = $obj_http_client.GetAsync($file.url).Result
-            $response.EnsureSuccessStatusCode() | Out-Null
-            $content = $response.Content.ReadAsByteArrayAsync().Result
-            [System.IO.File]::WriteAllBytes($file.save_path, $content)
+            if ($script:offline)
+            {
+                # 离线模式：从本地 ja-netfilter 目录复制
+                $rel = $file.url.Substring($script:url_download.Length).TrimStart("/").Replace("/", "\")
+                $src = [IO.Path]::Combine($script:offline_resources_dir, $rel)
+                if (-not (Test-Path -LiteralPath $src))
+                {
+                    $msg = Get-i18nString "not_found_dir"
+                    Error ($msg -f $script:offline_resources_dir)
+                    Exit-Program
+                }
+                $content = [IO.File]::ReadAllBytes($src)
+                [IO.File]::WriteAllBytes($file.save_path, $content)
+            }
+            else
+            {
+                $response = $obj_http_client.GetAsync($file.url).Result
+                $response.EnsureSuccessStatusCode() | Out-Null
+                $content = $response.Content.ReadAsByteArrayAsync().Result
+                [System.IO.File]::WriteAllBytes($file.save_path, $content)
+            }
 
             if ( $file.url.Contains(".jar"))
             {
@@ -570,12 +620,12 @@ function File_Download
             Error ($msg -f $file.url)
             $msg = Get-i18nString "request_fail"
             Debug ($msg -f $_.Exception.Message)
-            $obj_http_client.CancelPendingRequests()
+            if ($obj_http_client) { $obj_http_client.CancelPendingRequests() }
             Exit-Program
         }
     }
 
-    $obj_http_client.Dispose()
+    if ($obj_http_client) { $obj_http_client.Dispose() }
 }
 
 # 清理 vmoptions 文件
@@ -708,35 +758,63 @@ function Create_Key([hashtable]$product, [string]$prd_full_name, [string]$custom
         licenseName = $script:license.licenseName
         productCode = $product.product_code
     }
-    $msg = Get-i18nString "requesting_key"
-    Debug ($msg -f $script:url_license, $json_body, $file_key)
-    $obj_http_client = Get-HttP_Client
-    try
+    if ($script:offline -and $script:offline_license_cmd -and $script:offline_license_script)
     {
-        $response = $obj_http_client.PostAsync(
-                $script:url_license,
-                [System.Net.Http.StringContent]::new($json_body, [System.Text.Encoding]::UTF8, "application/json")
-        ).Result
+        # 离线模式：调用本地许可证生成器（不启动服务器）
+        $msg = Get-i18nString "requesting_key"
+        Debug ($msg -f $script:url_license, $json_body, $file_key)
+        & $script:offline_license_cmd $script:offline_license_script `
+            --product-code $product.product_code `
+            --license-name $script:license.licenseName `
+            --expiry $script:license.expiryDate `
+            --assignee $script:license.assigneeName `
+            -o $file_key
+        if ($LASTEXITCODE -eq 0)
+        {
+            $msg = Get-i18nString "writing_key"
+            Debug ($msg -f $file_key)
+            Process_Disabled_Plugins($file_disable_plugins)
+            $msg = Get-i18nString "activation_success"
+            Success ($msg -f $prd_full_name)
+        }
+        else
+        {
+            $msg = Get-i18nString "manual_activation_required"
+            Warning ($msg -f $prd_full_name)
+        }
+    }
+    else
+    {
+        $msg = Get-i18nString "requesting_key"
+        Debug ($msg -f $script:url_license, $json_body, $file_key)
+        $obj_http_client = Get-HttP_Client
+        try
+        {
+            $response = $obj_http_client.PostAsync(
+                    $script:url_license,
+                    [System.Net.Http.StringContent]::new($json_body, [System.Text.Encoding]::UTF8, "application/json")
+            ).Result
 
-        $response.EnsureSuccessStatusCode() | Out-Null
-        $key_bytes = $response.Content.ReadAsByteArrayAsync().Result
-        $msg = Get-i18nString "writing_key"
-        Debug ($msg -f $file_key)
-        [System.IO.File]::WriteAllBytes($file_key, $key_bytes)
-        Process_Disabled_Plugins($file_disable_plugins)
-        $msg = Get-i18nString "activation_success"
-        Success ($msg -f $prd_full_name)
-    }
-    catch
-    {
-        $msg = Get-i18nString "manual_activation_required"
-        Warning ($msg -f $prd_full_name)
-        $msg = Get-i18nString "request_failed"
-        Debug ($msg -f $prd_full_name, $_.Exception.Message)
-    }
-    finally
-    {
-        $obj_http_client.Dispose()
+            $response.EnsureSuccessStatusCode() | Out-Null
+            $key_bytes = $response.Content.ReadAsByteArrayAsync().Result
+            $msg = Get-i18nString "writing_key"
+            Debug ($msg -f $file_key)
+            [System.IO.File]::WriteAllBytes($file_key, $key_bytes)
+            Process_Disabled_Plugins($file_disable_plugins)
+            $msg = Get-i18nString "activation_success"
+            Success ($msg -f $prd_full_name)
+        }
+        catch
+        {
+            $msg = Get-i18nString "manual_activation_required"
+            Warning ($msg -f $prd_full_name)
+            $msg = Get-i18nString "request_failed"
+            Debug ($msg -f $prd_full_name, $_.Exception.Message)
+        }
+        finally
+        {
+            if ($obj_http_client) { $obj_http_client.Dispose() }
+        }
     }
 }
 
@@ -849,7 +927,13 @@ function Main
     {
         Warning (Get-i18nString "admin_request")
         $null = Read-Host
-        Start-Process powershell.exe -ArgumentList "-Command irm http://localhost:10768|iex" -Verb RunAs
+        if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+            # 本地文件运行：重跑自身（-Offline 保持离线意图，不依赖服务器）
+            Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Offline" -Verb RunAs
+        } else {
+            # 管道运行（irm | iex）：沿用服务器模式
+            Start-Process powershell.exe -ArgumentList "-Command irm http://localhost:10768|iex" -Verb RunAs
+        }
         exit -1
     }
 
@@ -863,6 +947,57 @@ function Main
     $script:url_base = "http://localhost:10768"
     $script:url_download = "$script:url_base/ja-netfilter"
     $script:url_license = "$script:url_base/generateLicense/file"
+
+    # 离线模式。判定优先级：显式环境变量 > -Offline 参数 > 自动检测仓库位置。
+    #   OFFLINE_RESOURCES_DIR  仓库内 ja-netfilter/ 目录，资源改从本地复制而非 HTTP
+    #   OFFLINE_LICENSE_CMD    python 可执行程序
+    #   OFFLINE_LICENSE_SCRIPT 离线许可证生成器 server/generate_license.py
+    # 自动检测：脚本位于仓库 scripts\Windows\ 时，其上级两级即仓库根目录。
+    $script:offline_resources_dir = $env:OFFLINE_RESOURCES_DIR
+    $script:offline_license_cmd = $env:OFFLINE_LICENSE_CMD
+    $script:offline_license_script = $env:OFFLINE_LICENSE_SCRIPT
+
+    if ([string]::IsNullOrWhiteSpace($script:offline_resources_dir))
+    {
+        $repo_root = $null
+        if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot))
+        {
+            $candidate = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..') -ErrorAction SilentlyContinue
+            if ($candidate)
+            {
+                $root = $candidate.Path
+                if ((Test-Path -LiteralPath (Join-Path $root 'ja-netfilter')) -and
+                    (Test-Path -LiteralPath (Join-Path $root 'server\generate_license.py')))
+                {
+                    $repo_root = $root
+                }
+            }
+        }
+        if ($repo_root)
+        {
+            $script:offline_resources_dir = Join-Path $repo_root 'ja-netfilter'
+            $script:offline_license_script = Join-Path $repo_root 'server\generate_license.py'
+        }
+        elseif ($script:offline_force)
+        {
+            Error (Get-i18nString "offline_requires_repo")
+            Exit-Program
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($script:offline_resources_dir) -and
+        [string]::IsNullOrWhiteSpace($script:offline_license_cmd))
+    {
+        # 离线需本地 Python 生成许可证
+        $script:offline_license_cmd = Find-Python
+        if ([string]::IsNullOrWhiteSpace($script:offline_license_cmd))
+        {
+            Error (Get-i18nString "python_not_found")
+            Exit-Program
+        }
+    }
+
+    $script:offline = -not [string]::IsNullOrWhiteSpace($script:offline_resources_dir)
 
     $script:dir_work = "$public_path\.jb_run\"
     $script:dir_config = "$script:dir_work\config\"
