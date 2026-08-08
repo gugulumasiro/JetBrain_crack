@@ -849,7 +849,7 @@ function Main
     {
         Warning (Get-i18nString "admin_request")
         $null = Read-Host
-        Start-Process powershell.exe -ArgumentList "-Command irm ckey.run|iex" -Verb RunAs
+        Start-Process powershell.exe -ArgumentList "-Command irm http://localhost:10768|iex" -Verb RunAs
         exit -1
     }
 
@@ -860,8 +860,7 @@ function Main
     # 初始化全局变量
     $user_path = [Environment]::GetEnvironmentVariable("USERPROFILE")
     $public_path = [Environment]::GetEnvironmentVariable("PUBLIC")
-    #$script:url_base = "http://localhost:10768"
-    $script:url_base = "https://ckey.run"
+    $script:url_base = "http://localhost:10768"
     $script:url_download = "$script:url_base/ja-netfilter"
     $script:url_license = "$script:url_base/generateLicense/file"
 

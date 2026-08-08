@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CodeKey Run — 离线复现面板</title>
+<title>JetBrains 离线激活面板</title>
 <style>
   :root {
     --bg: #1e1e2e; --card: #282840; --text: #cdd6f4; --sub: #a6adc8;
@@ -135,8 +135,8 @@
 <body>
 
 <header>
-  <h1>CodeKey Run</h1>
-  <p>离线复现面板 — 教学研究用</p>
+  <h1>JetBrains 离线激活</h1>
+  <p>离线激活面板 — 教学研究用</p>
   <div class="server-bar">
     <span class="dot on" id="statusDot"></span>
     <span id="statusText">服务器已连接</span>
@@ -170,7 +170,7 @@
   <div id="result">
     <!-- 激活码（网站同款格式） -->
     <div class="code-box">
-      <div class="label">🔑 激活码（与 ckey.run 网站格式一致，<span id="codeLength">-</span>）</div>
+      <div class="label">🔑 激活码（JetBrains 许可证格式，<span id="codeLength">-</span>）</div>
       <textarea id="codeDisplay" readonly onclick="this.select()" placeholder="点击生成..."></textarea>
       <div class="hint">点击文本框全选，Ctrl+C 复制</div>
     </div>
@@ -400,9 +400,9 @@ function downloadAll() {
   server = server.replace(/\/+$/, '');
   var a = document.createElement('a');
   a.href = server + '/scripts.zip';
-  a.download = 'ckey-scripts.zip';
+  a.download = 'jetbrains-scripts.zip';
   document.body.appendChild(a); a.click(); a.remove();
-  toast('✅ 正在下载 ckey-scripts.zip');
+  toast('✅ 正在下载 jetbrains-scripts.zip');
 }
 
 document.getElementById('serverUrl').addEventListener('input', updateCommands);

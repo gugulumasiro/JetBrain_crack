@@ -1,2 +1,35 @@
-/.claude
-/.idea
+# ---- Claude Code ----
+/.claude/
+
+# ---- IDE / 编辑器 ----
+/.idea/
+.vscode/
+*.swp
+*.swo
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 系统文件 ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---- 本地签名密钥（不入库，运行 python server/regenerate_keys.py 生成） ----
+/keys/
+
+# ---- 日志 / 临时文件 ----
+*.log
+*.tmp
+*.bak

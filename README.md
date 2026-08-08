@@ -1,4 +1,4 @@
-# ckey.run 离线复现（本地激活服务）
+# JetBrains IDE离线激活本地服务
 
 基于 ja-netfilter / power.jar 原理的 JetBrains 许可证离线激活服务。
 许可证由本地 RSA 私钥 + 自签名证书真正签名生成，激活时 IDE 的证书信任链由 power.conf 拦截。
@@ -6,26 +6,30 @@
 ## 目录结构
 
 ```
-ckey/
+JetBrain_crack/
 ├── server/
-│   └── local_server.py           # 本地 HTTP 服务器（模拟 ckey.run 端点）
+│   └── local_server.py           # 本地 HTTP 服务器（提供激活所需端点）
 ├── web/
 │   └── dashboard.html            # 浏览器访问 / 时显示的操作面板
-├── scripts/
-│   ├── activate.sh               # Linux/Mac 激活脚本（GET / 快捷运行，/export/ 导出）
-│   ├── activate.ps1              # Windows 激活脚本（GET / 快捷运行，/export/ 导出）
-│   ├── offline_activate.ps1      # Windows 免交互激活脚本（GET /activate /export/）
-│   ├── offline_activate.sh       # Linux/Mac 免交互激活脚本（GET /activate /export/）
-│   ├── debug.sh                  # Debug 模式脚本（GET /debug /export/）
-│   └── uninstall.sh              # 卸载脚本（GET /uninstall /export/）
+├── scripts/                      # 各平台激活脚本（按系统分目录，/export/ 导出时改写本机地址）
+│   ├── Windows/
+│   │   ├── activate.ps1          # Windows 交互式激活脚本（GET / 快捷运行，/export/ 导出）
+│   │   └── offline_activate.ps1  # Windows 免交互批量激活脚本（GET /activate /export/）
+│   ├── Linux-macOS/
+│   │   ├── activate.sh           # Linux/Mac 交互式激活脚本（GET / 快捷运行，/export/ 导出）
+│   │   ├── offline_activate.sh   # Linux/Mac 免交互批量激活脚本（GET /activate /export/）
+│   │   ├── debug.sh              # Debug 模式脚本（GET /debug /export/）
+│   │   └── uninstall.sh          # 卸载脚本（GET /uninstall /export/）
+│   └── 使用说明.txt               # 随 /scripts.zip 打包的使用说明
 ├── ja-netfilter/                 # ja-netfilter 部署资源（GET /ja-netfilter/*）
 │   ├── ja-netfilter.jar
 │   ├── config/                   # dns.conf env.conf native.conf power.conf url.conf
 │   └── plugins/                  # dns.jar env.jar hideme.jar native.jar power.jar privacy.jar url.jar
-├── keys/                         # 本地 RSA 密钥与证书（签名来源）
-│   ├── private.pem
+├── keys/                         # 本地 RSA 密钥与证书（签名来源；不入库，见「生成密钥」）
+│   ├── private.pem               #   由 python server/regenerate_keys.py 生成
 │   ├── public.pem
 │   └── cert.der
+├── requirements.txt              # Python 依赖清单
 └── README.md
 ```
 
@@ -97,7 +101,7 @@ curl -Ls http://localhost:10768/export/offline_activate.sh -o offline_activate.s
 浏览器打开 `http://localhost:10768/scripts.zip`，或：
 
 ```bash
-curl -Ls http://localhost:10768/scripts.zip -o ckey-scripts.zip
+curl -Ls http://localhost:10768/scripts.zip -o jetbrains-scripts.zip
 ```
 
 zip 内含 Windows 与 Linux/macOS 两端共 6 个脚本（activate / offline_activate /
@@ -128,6 +132,31 @@ JSON 签名另由 IDE 用证书内嵌公钥按 **RSA-SHA1 + PKCS1v15** 独立校
 
 ## 依赖
 
-- Python 3.8+，`cryptography` 库（`pip install cryptography`）
-- 若本地密钥丢失，可重新生成：`openssl req -x509 -newkey rsa:4096 ...` 放入
-  `keys/`（证书 CN 任意，power.conf 参数 1/4 需按上述方式重算）
+- Python 3.8+
+- 安装依赖：`pip install -r requirements.txt`（仅需要 `cryptography`）
+- 首次使用前先生成 `keys/`，见下方「生成密钥」
+
+## 生成密钥（keys/）
+
+`keys/` 目录（`private.pem` / `public.pem` / `cert.der`）已在 `.gitignore` 中排除、
+不入库，仓库本身不包含任何私钥。首次使用前、启动服务器**之前**运行一次生成脚本：
+
+```bash
+python server/regenerate_keys.py            # 缺失时补齐密钥/证书，并校准 power.conf
+python server/regenerate_keys.py --force    # 忽略已有文件，全新生成一套
+```
+
+脚本会：
+
+1. 生成 RSA-4096 私钥 `keys/private.pem` 与公钥 `keys/public.pem`；
+2. 用该私钥生成自签名证书 `keys/cert.der`。**证书 issuer CN 必须为 `JetProfile CA`**
+   （IDE 以此作为证书信任锚点），subject CN 为 `Jetbrains-Help`；用普通
+   `openssl req -x509` 生成会因 issuer=subject 而无法通过证书链校验，请不要用
+   命令行工具替代本脚本；
+3. 依据证书重算 `power.conf` 的**参数1**（证书签名 `int(cert.signature)`）与
+   **参数4**（EMSA-PKCS1v15(SHA256(cert TBS), k=512)）；**参数3（JetBrains CA
+   模数，IDE 内置）保持不变**，原文件行尾与其它内容原样保留。
+
+之后按上文「启动服务器」正常启动即可，许可证由本地私钥真实签名生成。
+若在生成密钥之前启动服务器，签发的许可证将永远无法通过校验，请务必先跑一遍
+本脚本再启动。

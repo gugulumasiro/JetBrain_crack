@@ -1,4 +1,4 @@
-ckey 离线激活脚本包（本地服务器 http://localhost:10768）
+JetBrains 离线激活脚本包（本地服务器 http://localhost:10768）
 
 Windows PowerShell（管理员）：
   快捷运行    irm http://localhost:10768 | iex

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ckey.run 离线复现本地服务器
-模拟 https://ckey.run 的所有关键 API 端点，用于离线研究和教学目的。
+JetBrains 离线激活本地服务器
+提供 JetBrains 许可证离线激活所需的本地 API 端点，用于离线研究和教学目的。
 
 启动方式：
     python local_server.py              # 默认监听 0.0.0.0:10768
@@ -130,8 +130,8 @@ _load_signing_key()
 
 def generate_license_key(assignee_name, expiry_date, license_name, product_code):
     """
-    模拟 ckey.run 的 /generateLicense/file 端点。
-    生成与真实服务器完全一致的许可证文件格式。
+    生成 JetBrains 许可证（对应 /generateLicense/file 端点）。
+    文件格式与官方服务器完全一致。
 
     许可证文件结构（UTF-16 LE 编码）：
         第1行: ￿<certificate-key>
@@ -223,8 +223,8 @@ def generate_license_key_text(assignee_name, expiry_date, license_name, product_
 
 # ===================== HTTP 请求处理器 =====================
 
-class CKeyRunHandler(http.server.BaseHTTPRequestHandler):
-    """模拟 ckey.run 服务器的 HTTP 请求处理器"""
+class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
+    """JetBrains 离线激活 HTTP 请求处理器"""
 
     def log_message(self, format, *args):
         """自定义日志格式"""
@@ -278,41 +278,31 @@ class CKeyRunHandler(http.server.BaseHTTPRequestHandler):
 
     @staticmethod
     def _rewrite_script(content, local_base):
-        """改写激活脚本：URL 基址、移除浏览器自动跳转、提权行、品牌名。
+        """改写激活脚本：把脚本内默认服务器地址替换为客户端可访问的地址。
 
-        注意：提权行必须先于品牌替换执行，否则 ckey.run 已被换成
-        JetBrain，`irm ckey.run|iex` 就匹配不上了。
+        提权重下载行（`irm http://localhost:10768|iex`）改写为走 /export/
+        端点保存脚本（保留 BOM），保证 PS 5.1 能解析落盘的文件。
         """
         content = content.replace(
-            b'$script:url_base = "https://ckey.run"',
+            b'$script:url_base = "http://localhost:10768"',
             f'$script:url_base = "{local_base}"'.encode())
         content = content.replace(
             b'URL_BASE="http://localhost:10768"',
             f'URL_BASE="{local_base}"'.encode())
         content = content.replace(
-            b'    $OPEN_CMD "$URL_BASE" &>/dev/null',
-            b'    # [OFFLINE] browser redirect removed')
-        content = content.replace(
-            b'    Start-Process "https://ckey.run"',
-            b'    # [OFFLINE] browser redirect removed')
-        # 提权重下载走 /export/ 端点（保留 BOM），保证 PS 5.1 能解析保存的文件
-        content = content.replace(
-            b'irm ckey.run|iex',
+            b'irm http://localhost:10768|iex',
             f'irm {local_base}/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1'.encode())
-        content = content.replace(b'CodeKey Run', b'JetBrain')
-        content = content.replace(b'ckey.run', b'JetBrain')
         return content
 
     @staticmethod
     def _rewrite_offline(content, local_base):
-        """改写免交互激活脚本：服务器默认地址、品牌名。"""
+        """改写免交互激活脚本：把默认服务器地址替换为客户端可访问的地址。"""
         content = content.replace(
             b'[string]$Server = "http://localhost:10768"',
             f'[string]$Server = "{local_base}"'.encode())
         content = content.replace(
             b'SERVER="${1:-http://localhost:10768}"',
             f'SERVER="${{1:-{local_base}}}"'.encode())
-        content = content.replace(b'ckey.run', b'JetBrain')
         return content
 
     def _read_rewritten(self, filepath, offline):
@@ -426,7 +416,7 @@ class CKeyRunHandler(http.server.BaseHTTPRequestHandler):
             ("Linux-macOS/uninstall.sh", "Linux-macOS/uninstall.sh", False, False),
         ]
         readme = (
-            "ckey 离线激活脚本包（本地服务器 %s）\n"
+            "JetBrains 离线激活脚本包（本地服务器 %s）\n"
             "\n"
             "Windows PowerShell（管理员）：\n"
             "  快捷运行    irm %s | iex\n"
@@ -458,7 +448,7 @@ class CKeyRunHandler(http.server.BaseHTTPRequestHandler):
         data = buf.getvalue()
         self.send_response(200)
         self.send_header("Content-Type", "application/zip")
-        self.send_header("Content-Disposition", 'attachment; filename="ckey-scripts.zip"')
+        self.send_header("Content-Disposition", 'attachment; filename="jetbrains-scripts.zip"')
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -480,7 +470,7 @@ class CKeyRunHandler(http.server.BaseHTTPRequestHandler):
 
         assignee_name = data.get("assigneeName", "")
         expiry_date = data.get("expiryDate", "2099-12-31")
-        license_name = data.get("licenseName", "ckey.run")
+        license_name = data.get("licenseName", "JetBrain")
         product_code = data.get("productCode", "")
 
         print(f"  → Generating license: name={license_name}, "
@@ -598,7 +588,7 @@ class CKeyRunHandler(http.server.BaseHTTPRequestHandler):
         return generate_license_key_text(
             body_data.get("assigneeName", ""),
             body_data.get("expiryDate", "2099-12-31"),
-            body_data.get("licenseName", "ckey.run"),
+            body_data.get("licenseName", "JetBrain"),
             body_data.get("productCode", "")
         )
 
@@ -731,7 +721,7 @@ def _pick_free_port(host):
         s.close()
 
 
-class _CKeyServer(http.server.ThreadingHTTPServer):
+class _JetBrainsServer(http.server.ThreadingHTTPServer):
     """
     独占端口监听：
     - Windows 上 HTTPServer 默认 allow_reuse_address=1，SO_REUSEADDR 允许两个 socket
@@ -749,7 +739,7 @@ class _CKeyServer(http.server.ThreadingHTTPServer):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ckey.run 离线复现本地服务器",
+        description="JetBrains 离线激活本地服务器",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -773,7 +763,7 @@ def main():
     curl -Ls http://localhost:10768/export/offline_activate.sh -o offline_activate.sh && bash offline_activate.sh
 
 一次性导出各平台全部脚本:
-    curl -Ls http://localhost:10768/scripts.zip -o ckey-scripts.zip
+    curl -Ls http://localhost:10768/scripts.zip -o jetbrains-scripts.zip
         """
     )
     parser.add_argument("--host", default=DEFAULT_HOST,
@@ -821,9 +811,9 @@ def main():
             print(f"[INFO] 残留实例已结束，使用原端口 {args.port} 启动。")
 
     # 启动服务器（Windows 独占端口，杜绝旧实例双绑）
-    server = _CKeyServer((args.host, args.port), CKeyRunHandler)
+    server = _JetBrainsServer((args.host, args.port), JetBrainsHandler)
     print("=" * 60)
-    print("  ckey.run 离线复现本地服务器")
+    print("  JetBrains 离线激活本地服务器")
     print("  仅供教学和研究使用")
     print("=" * 60)
     print(f"  监听地址: http://{args.host}:{args.port}")
@@ -851,7 +841,7 @@ def main():
     print(f"    # 免交互激活 (Linux/Mac):")
     print(f"    curl -Ls http://{args.host}:{args.port}/export/offline_activate.sh -o offline_activate.sh && bash offline_activate.sh")
     print(f"    # 一次性导出各平台全部脚本:")
-    print(f"    curl -Ls http://{args.host}:{args.port}/scripts.zip -o ckey-scripts.zip")
+    print(f"    curl -Ls http://{args.host}:{args.port}/scripts.zip -o jetbrains-scripts.zip")
     print()
     print("  按 Ctrl+C 停止服务器")
     print("=" * 60)
