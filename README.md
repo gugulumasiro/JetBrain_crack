@@ -191,6 +191,20 @@ curl -Ls http://localhost:10768/export/one-click-activate.cmd -o one-click-activ
 one-click-activate.cmd
 ```
 
+**导出离线激活包（zip）**：服务器也可把「激活脚本 + ja-netfilter 资源 + 许可证生成器 +
+已生成的密钥」打包成一个 zip。解压到任意目录后运行 activate 脚本即自动进入离线模式激活，
+**不依赖服务器在线、不依赖仓库配套文件**，适合拷贝到其它机器使用：
+
+```bash
+curl -Ls http://localhost:10768/export/offline-pack.zip -o JetBrain-offline.zip
+unzip JetBrain-offline.zip
+bash JetBrain-offline/scripts/Linux-macOS/activate.sh
+```
+
+（Windows 解压后运行 `JetBrain-offline\scripts\Windows\activate.ps1` 或
+`one-click-activate.cmd` 亦可。）导出前需已在服务器所在机器生成过 `keys/` 密钥，
+否则接口会返回 400 提示先生成密钥。
+
 端口冲突处理：启动前会先探测端口占用情况，若占用者是本服务残留实例（命令行含
 `local_server.py`）会自动结束并用原端口重启；若是其它程序则改用随机可用端口启动并告知。
 

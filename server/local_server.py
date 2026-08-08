@@ -11,6 +11,7 @@ JetBrains 离线激活本地服务器
 端点：
     GET  /                              → 浏览器返回操作面板；PowerShell/curl 返回激活脚本（快捷运行，无 BOM）
     GET  /export/<name>                 → 导出单个脚本（.ps1 保留 UTF-8 BOM，便于 PS 5.1 解析保存的文件；.cmd 为 GBK 编码）
+    GET  /export/offline-pack.zip       → 导出离线激活包（zip：资源+密钥+脚本，解压后即可离线激活）
     GET  /ja-netfilter/<path>           → 返回 ja-netfilter 资源文件
     POST /generateLicense/file          → 生成并返回 .key 许可证文件
 """
@@ -362,6 +363,59 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(content)
         print(f"  → 200 OK ({len(content)} bytes) - export/{name}")
 
+    def _send_offline_pack(self):
+        """导出离线激活包（zip）：激活脚本 + ja-netfilter 资源树 + 许可证生成器 + 预生成密钥。
+
+        解压到任意目录后运行 activate 脚本即自动进入离线模式激活，
+        不依赖服务器在线、不依赖仓库配套文件。"""
+        import zipfile
+        from io import BytesIO
+
+        if not (os.path.isfile(os.path.join(KEYS_DIR, "private.pem"))
+                and os.path.isfile(os.path.join(KEYS_DIR, "cert.der"))):
+            self._send_error(400, "keys/ 密钥不存在，请先运行 python scripts/generate_keys.py "
+                                  "生成密钥后再导出离线激活包。")
+            return
+
+        root = "JetBrain-offline"
+        files = [
+            ("scripts/generate_keys.py", f"{root}/scripts/generate_keys.py"),
+            ("scripts/Windows/activate.ps1", f"{root}/scripts/Windows/activate.ps1"),
+            ("scripts/Windows/one-click-activate.ps1", f"{root}/scripts/Windows/one-click-activate.ps1"),
+            ("scripts/Windows/one-click-activate.cmd", f"{root}/scripts/Windows/one-click-activate.cmd"),
+            ("scripts/Linux-macOS/activate.sh", f"{root}/scripts/Linux-macOS/activate.sh"),
+            ("scripts/Linux-macOS/one-click-activate.sh", f"{root}/scripts/Linux-macOS/one-click-activate.sh"),
+            ("server/local_server.py", f"{root}/server/local_server.py"),
+            ("server/generate_license.py", f"{root}/server/generate_license.py"),
+        ]
+        key_files = ["private.pem", "public.pem", "cert.der"]
+
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for disk, arc in files:
+                src = os.path.join(BASE_DIR, disk)
+                if os.path.isfile(src):
+                    zf.write(src, arc)
+            if os.path.isdir(JA_NETFILTER_DIR):
+                for dirpath, _dirnames, filenames in os.walk(JA_NETFILTER_DIR):
+                    for fn in filenames:
+                        full = os.path.join(dirpath, fn)
+                        rel = os.path.relpath(full, JA_NETFILTER_DIR).replace(os.sep, "/")
+                        zf.write(full, f"{root}/ja-netfilter/{rel}")
+            for kf in key_files:
+                src = os.path.join(KEYS_DIR, kf)
+                if os.path.isfile(src):
+                    zf.write(src, f"{root}/keys/{kf}")
+
+        content = buf.getvalue()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", 'attachment; filename="JetBrain-offline.zip"')
+        self.send_header("Content-Length", len(content))
+        self.end_headers()
+        self.wfile.write(content)
+        print(f"  → 200 OK ({len(content)} bytes) - export/offline-pack.zip")
+
     def _generate_license(self):
         """处理许可证生成请求"""
         content_length = int(self.headers.get("Content-Length", 0))
@@ -438,7 +492,11 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
             self._send_script(script)
 
         elif path.startswith("/export/"):
-            self._send_export(path[len("/export/"):])
+            name = path[len("/export/"):]
+            if name == "offline-pack.zip":
+                self._send_offline_pack()
+            else:
+                self._send_export(name)
 
         elif path.startswith("/ja-netfilter/"):
             # 提供 ja-netfilter 资源文件
@@ -706,6 +764,7 @@ def main():
     print("  可用端点:")
     print(f"    GET  http://{args.host}:{args.port}/")
     print(f"    GET  http://{args.host}:{args.port}/export/<name>")
+    print(f"    GET  http://{args.host}:{args.port}/export/offline-pack.zip")
     print(f"    POST http://{args.host}:{args.port}/generateLicense/file")
     print(f"    GET  http://{args.host}:{args.port}/ja-netfilter/<path>")
     print()
@@ -720,6 +779,8 @@ def main():
     print(f"    irm http://{args.host}:{args.port}/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1")
     print(f"    # 导出为本地脚本 Windows CMD:")
     print(f"    curl -Ls http://{args.host}:{args.port}/export/one-click-activate.cmd -o one-click-activate.cmd && one-click-activate.cmd")
+    print(f"    # 导出离线激活包（zip：含资源与密钥，解压后即可离线激活，无需服务器）:")
+    print(f"    curl -Ls http://{args.host}:{args.port}/export/offline-pack.zip -o JetBrain-offline.zip && unzip JetBrain-offline.zip && bash JetBrain-offline/scripts/Linux-macOS/activate.sh")
     print()
     print("  按 Ctrl+C 停止服务器")
     print("=" * 60)

@@ -207,14 +207,15 @@
 
   <!-- 激活命令 -->
   <h2>③ 一键激活命令（注入 ja-netfilter）</h2>
-  <p class="sec-hint">每端都有两种用法：<strong>快捷运行</strong>（不落地脚本，管道直接执行）与 <strong>导出为本地脚本</strong>（先保存文件再运行，适合审阅留档）。</p>
+  <p class="sec-hint">每端都有两种用法：<strong>快捷运行</strong>（不落地脚本，管道直接执行）与 <strong>导出为本地脚本</strong>（仅下载保存，不自动运行，可审阅后自行运行）。</p>
   <div class="cmd-grid">
     <div class="cmd-item">
       <div class="label">🪟 Windows PowerShell（右键管理员运行）</div>
       <div class="mode">快捷运行（不保存文件）:</div>
       <code id="cmdWinRun"></code>
       <button class="copy small" onclick="copyCmd('cmdWinRun')">复制命令</button>
-      <div class="mode">导出为本地脚本（保存后运行）:</div>
+      <div class="mode">导出为本地脚本（仅下载，不运行）:</div>
+      <button class="copy small" onclick="downloadExport('activate.ps1')">⬇ 下载 activate.ps1</button>
       <code id="cmdWinFile"></code>
       <button class="copy small" onclick="copyCmd('cmdWinFile')">复制命令</button>
     </div>
@@ -223,9 +224,18 @@
       <div class="mode">快捷运行（不保存文件）:</div>
       <code id="cmdUnixRun"></code>
       <button class="copy small" onclick="copyCmd('cmdUnixRun')">复制命令</button>
-      <div class="mode">导出为本地脚本（保存后运行）:</div>
+      <div class="mode">导出为本地脚本（仅下载，不运行）:</div>
+      <button class="copy small" onclick="downloadExport('activate.sh')">⬇ 下载 activate.sh</button>
       <code id="cmdUnixFile"></code>
       <button class="copy small" onclick="copyCmd('cmdUnixFile')">复制命令</button>
+    </div>
+    <div class="cmd-item">
+      <div class="label">📦 离线激活包（zip）</div>
+      <div class="mode">浏览器直接下载（含全部脚本、资源与密钥，解压后即可离线激活，不依赖服务器）:</div>
+      <button class="copy" onclick="downloadOfflinePack()">⬇ 下载离线激活包（zip）</button>
+      <div class="mode">命令行下载:</div>
+      <code id="cmdOfflinePack"></code>
+      <button class="copy small" onclick="copyCmd('cmdOfflinePack')">复制命令</button>
     </div>
   </div>
 </main>
@@ -371,14 +381,31 @@ function copyCmd(id) {
   navigator.clipboard.writeText(el.textContent).then(function() { toast('✅ 命令已复制'); });
 }
 
+function downloadFile(urlPath, saveName) {
+  var server = document.getElementById('serverUrl').value.trim() || 'http://localhost:10768';
+  server = server.replace(/\/+$/, '');
+  var a = document.createElement('a');
+  a.href = server + urlPath;
+  a.download = saveName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  toast('⬇ 已下载 ' + saveName);
+}
+
+function downloadOfflinePack() { downloadFile('/export/offline-pack.zip', 'JetBrain-offline.zip'); }
+
+function downloadExport(name) { downloadFile('/export/' + name, name); }
+
 // 根据 serverUrl 动态生成激活命令
 function updateCommands() {
   var server = document.getElementById('serverUrl').value.trim() || 'http://localhost:10768';
   server = server.replace(/\/+$/, '');
   document.getElementById('cmdWinRun').textContent = 'irm ' + server + ' | iex';
-  document.getElementById('cmdWinFile').textContent = 'irm ' + server + '/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1';
+  document.getElementById('cmdWinFile').textContent = 'irm ' + server + '/export/activate.ps1 -OutFile activate.ps1';
   document.getElementById('cmdUnixRun').textContent = 'curl -Ls ' + server + ' | bash';
-  document.getElementById('cmdUnixFile').textContent = 'curl -Ls ' + server + '/export/activate.sh -o activate.sh && bash activate.sh';
+  document.getElementById('cmdUnixFile').textContent = 'curl -Ls ' + server + '/export/activate.sh -o activate.sh';
+  document.getElementById('cmdOfflinePack').textContent = 'curl -Ls ' + server + '/export/offline-pack.zip -o JetBrain-offline.zip';
 }
 
 document.getElementById('serverUrl').addEventListener('input', updateCommands);
