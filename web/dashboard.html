@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeKey Run — 离线复现面板</title>
+<style>
+  :root {
+    --bg: #1e1e2e; --card: #282840; --text: #cdd6f4; --sub: #a6adc8;
+    --accent: #89b4fa; --green: #a6e3a1; --red: #f38ba8; --yellow: #f9e2af;
+    --orange: #fab387; --border: #45475a; --input: #313244; --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh; line-height: 1.6;
+  }
+  header {
+    background: linear-gradient(135deg, #2a2a45 0%, #1e1e35 100%);
+    border-bottom: 1px solid var(--border); padding: 24px 0 18px;
+    text-align: center; position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 1.6rem; font-weight: 700; color: var(--accent); }
+  header p { color: var(--sub); font-size: .85rem; margin-top: 4px; }
+  .server-bar { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; font-size: .82rem; }
+  .server-bar input { background: var(--input); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; width: 260px; font-size: .82rem; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.off { background: var(--red); }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  h2 { font-size: 1.1rem; margin: 28px 0 14px; color: var(--accent); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .card {
+    background: var(--card); border: 2px solid var(--border); border-radius: var(--radius);
+    padding: 16px; cursor: pointer; transition: all .15s; text-align: center; user-select: none;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card.selected { border-color: var(--green); background: #2a3a2e; }
+  .card .icon { font-size: 2rem; margin-bottom: 6px; }
+  .card .name { font-size: .85rem; font-weight: 600; }
+  .card .code { font-size: .7rem; color: var(--sub); margin-top: 2px; }
+
+  .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
+  .form-group { display: flex; flex-direction: column; gap: 4px; }
+  .form-group label { font-size: .78rem; color: var(--sub); }
+  .form-group input {
+    background: var(--input); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 14px; border-radius: 8px; font-size: .88rem; width: 200px;
+  }
+  .form-group input:focus { border-color: var(--accent); outline: none; }
+
+  button {
+    background: var(--accent); color: #1e1e2e; border: none;
+    padding: 10px 24px; border-radius: 8px; font-size: .9rem;
+    font-weight: 600; cursor: pointer; transition: all .15s;
+  }
+  button:hover { opacity: .85; }
+  button.copy { background: var(--green); }
+  button.secondary { background: var(--input); color: var(--text); border: 1px solid var(--border); }
+  button.small { padding: 6px 14px; font-size: .8rem; }
+
+  #result { display: none; margin-top: 20px; }
+  #result.show { display: block; }
+
+  .license-card {
+    background: linear-gradient(135deg, #1a3a1a 0%, #1e2e1e 100%);
+    border: 2px solid var(--green); border-radius: var(--radius); padding: 24px;
+    margin-bottom: 16px;
+  }
+  .license-card .big-icon { font-size: 3rem; text-align: center; margin-bottom: 12px; }
+  .license-card .license-to {
+    text-align: center; font-size: 1.3rem; font-weight: 700; color: var(--green); margin-bottom: 4px;
+  }
+  .license-card .license-sub { text-align: center; font-size: .85rem; color: var(--sub); margin-bottom: 16px; }
+  .license-card table { width: 100%; border-collapse: collapse; }
+  .license-card td { padding: 6px 12px; font-size: .85rem; }
+  .license-card td:first-child { color: var(--sub); width: 100px; }
+  .license-card td:last-child { color: var(--text); font-weight: 600; word-break: break-all; }
+  .license-card .badge {
+    display: inline-block; background: var(--input); color: var(--green);
+    padding: 2px 8px; border-radius: 4px; font-size: .75rem; margin: 2px;
+  }
+
+  /* 激活码显示 */
+  .code-box {
+    background: #1a1a2e; border: 2px solid var(--orange); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 16px;
+  }
+  .code-box .label { color: var(--orange); font-weight: 600; margin-bottom: 8px; }
+  .code-box textarea {
+    width: 100%; background: var(--input); color: var(--green);
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+    font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
+    font-size: .75rem; resize: vertical; min-height: 60px; word-break: break-all;
+  }
+  .code-box .hint { color: var(--sub); font-size: .75rem; margin-top: 6px; }
+
+  .note {
+    background: #2a2a18; border: 1px solid #5a5a30; border-radius: var(--radius);
+    padding: 14px 18px; margin-bottom: 16px; font-size: .85rem;
+  }
+  .note strong { color: var(--yellow); }
+  .note code {
+    background: var(--input); padding: 2px 6px; border-radius: 4px;
+    font-family: monospace; font-size: .82rem; color: var(--orange);
+  }
+
+  details { margin-top: 12px; }
+  details summary { color: var(--sub); font-size: .82rem; cursor: pointer; padding: 4px 0; }
+  details summary:hover { color: var(--accent); }
+  pre {
+    background: var(--input); border-radius: 8px; padding: 12px 16px;
+    font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
+    font-size: .76rem; overflow-x: auto; white-space: pre; max-height: 250px;
+    overflow-y: auto; color: var(--green); margin-top: 8px;
+  }
+
+  .cmd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; margin-top: 12px; }
+  .cmd-item { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .cmd-item .label { font-size: .78rem; color: var(--sub); margin-bottom: 8px; }
+  .cmd-item .mode { font-size: .76rem; color: var(--yellow); margin-top: 12px; margin-bottom: 4px; }
+  .cmd-item .mode:first-of-type { margin-top: 0; }
+  .cmd-item code { display: block; background: var(--input); padding: 8px 14px; border-radius: 6px; margin: 6px 0 8px; font-size: .82rem; color: var(--green); word-break: break-all; }
+
+  .sec-hint { color: var(--sub); font-size: .82rem; margin: -6px 0 10px; }
+  .sec-hint strong { color: var(--yellow); }
+  .export-bar { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; }
+  .export-bar span { color: var(--sub); font-size: .78rem; flex: 1; min-width: 260px; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--green); color: #1e1e2e; padding: 10px 24px; border-radius: 8px; font-weight: 600; font-size: .85rem; z-index: 999; opacity: 0; transition: opacity .2s; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>CodeKey Run</h1>
+  <p>离线复现面板 — 教学研究用</p>
+  <div class="server-bar">
+    <span class="dot on" id="statusDot"></span>
+    <span id="statusText">服务器已连接</span>
+    <input type="text" id="serverUrl" value="http://localhost:10768" placeholder="服务器地址">
+    <button class="secondary small" onclick="checkServer()">检测</button>
+  </div>
+</header>
+
+<main>
+  <h2>① 选择要激活的产品</h2>
+  <div class="grid" id="productGrid"></div>
+
+  <h2>② 许可证参数</h2>
+  <div class="form-row">
+    <div class="form-group">
+      <label>许可证名称</label>
+      <input type="text" id="licenseName" value="JetBrain">
+    </div>
+    <div class="form-group">
+      <label>过期日期</label>
+      <input type="text" id="expiryDate" value="2099-12-31">
+    </div>
+    <div class="form-group">
+      <label>被授权人</label>
+      <input type="text" id="assigneeName" value="">
+    </div>
+    <button onclick="generateLicense()">生成许可证</button>
+  </div>
+
+  <!-- 结果 -->
+  <div id="result">
+    <!-- 激活码（网站同款格式） -->
+    <div class="code-box">
+      <div class="label">🔑 激活码（与 ckey.run 网站格式一致，<span id="codeLength">-</span>）</div>
+      <textarea id="codeDisplay" readonly onclick="this.select()" placeholder="点击生成..."></textarea>
+      <div class="hint">点击文本框全选，Ctrl+C 复制</div>
+    </div>
+
+    <!-- 许可证信息卡片 -->
+    <div class="license-card">
+      <div class="big-icon">📜</div>
+      <div class="license-to" id="licName">-</div>
+      <div class="license-sub">Licensed to <span id="licAssignee">-</span></div>
+      <table>
+        <tr><td>License ID</td><td><code id="licId">-</code></td></tr>
+        <tr><td>有效期至</td><td><span id="licExpiry" style="color:var(--green)">-</span></td></tr>
+        <tr><td>包含产品</td><td id="licProducts">-</td></tr>
+        <tr><td>.key 文件大小</td><td><span id="licSize">-</span></td></tr>
+      </table>
+    </div>
+
+    <div class="note">
+      <strong>JetBrains 不使用传统的 XXXXX-XXXXX 字符串激活码</strong> — 这里的激活码是<br>
+      <code>LicenseId-Base64JSON-Signature-Certificate</code> 格式，IDE 读取时由 ja-netfilter 接管验证。<br>
+      也可下载 <code>.key</code> 二进制文件直接放到 IDE 配置目录。
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button class="copy" onclick="downloadKey()">⬇ 下载 .key 文件</button>
+      <button class="secondary small" onclick="copyCode()">📋 复制激活码</button>
+      <button class="secondary small" onclick="copyJson()">📋 复制 JSON</button>
+    </div>
+
+    <details>
+      <summary>🔧 查看技术细节（JSON + Hex）</summary>
+      <pre id="jsonDisplay" style="color:var(--green)"></pre>
+      <pre id="keyHex" style="color:var(--yellow)"></pre>
+    </details>
+  </div>
+
+  <!-- 激活命令 -->
+  <h2>③ 一键激活命令（注入 ja-netfilter）</h2>
+  <p class="sec-hint">每端都有两种用法：<strong>快捷运行</strong>（不落地脚本，管道直接执行）与 <strong>导出为本地脚本</strong>（先保存文件再运行，适合审阅留档）。</p>
+  <div class="cmd-grid">
+    <div class="cmd-item">
+      <div class="label">🪟 Windows PowerShell（右键管理员运行）</div>
+      <div class="mode">快捷运行（不保存文件）:</div>
+      <code id="cmdWinRun"></code>
+      <button class="copy small" onclick="copyCmd('cmdWinRun')">复制命令</button>
+      <div class="mode">导出为本地脚本（保存后运行）:</div>
+      <code id="cmdWinFile"></code>
+      <button class="copy small" onclick="copyCmd('cmdWinFile')">复制命令</button>
+      <div class="mode">免交互批量激活本机全部 IDE:</div>
+      <code id="cmdWinOff"></code>
+      <button class="copy small" onclick="copyCmd('cmdWinOff')">复制命令</button>
+    </div>
+    <div class="cmd-item">
+      <div class="label">🐧 Linux / 🍎 macOS 终端</div>
+      <div class="mode">快捷运行（不保存文件）:</div>
+      <code id="cmdUnixRun"></code>
+      <button class="copy small" onclick="copyCmd('cmdUnixRun')">复制命令</button>
+      <div class="mode">导出为本地脚本（保存后运行）:</div>
+      <code id="cmdUnixFile"></code>
+      <button class="copy small" onclick="copyCmd('cmdUnixFile')">复制命令</button>
+      <div class="mode">免交互批量激活本机全部 IDE:</div>
+      <code id="cmdUnixOff"></code>
+      <button class="copy small" onclick="copyCmd('cmdUnixOff')">复制命令</button>
+    </div>
+  </div>
+  <div class="export-bar">
+    <button class="secondary" onclick="downloadAll()">⬇ 一次性导出各平台脚本 (zip)</button>
+    <span>包含 activate / offline_activate / debug / uninstall 共 6 个脚本，均已改写为本机服务器地址，.ps1 保留 UTF-8 BOM。</span>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var PRODUCTS = [
+  { name:"IntelliJ IDEA", code:"II,PCWMP,PSI",   icon:"🧠" },
+  { name:"PyCharm",       code:"PC,PSI,PCWMP",   icon:"🐍" },
+  { name:"PhpStorm",      code:"PS,PCWMP,PSI",   icon:"🐘" },
+  { name:"GoLand",        code:"GO,PSI,PCWMP",   icon:"🔵" },
+  { name:"CLion",         code:"CL,PSI,PCWMP",   icon:"⚙️"  },
+  { name:"WebStorm",      code:"WS,PCWMP,PSI",   icon:"🌐" },
+  { name:"Rider",         code:"RD,PDB,PSI,PCWMP",icon:"🎮" },
+  { name:"DataGrip",      code:"DB,PSI,PDB",     icon:"🗄️"  },
+  { name:"RubyMine",      code:"RM,PCWMP,PSI",   icon:"💎" },
+  { name:"DataSpell",     code:"DS,PSI,PDB,PCWMP",icon:"📊"},
+  { name:"RustRover",     code:"RR,PSI,PCWP",    icon:"🦀" },
+];
+
+var CODE_LABELS = {
+  "II":"IntelliJ IDEA","PC":"PyCharm","PS":"PhpStorm","GO":"GoLand",
+  "CL":"CLion","WS":"WebStorm","RD":"Rider","DB":"DataGrip",
+  "RM":"RubyMine","AC":"AppCode","DS":"DataSpell","RR":"RustRover",
+  "DM":"dotMemory","PCWMP":"All Products Pack","PSI":"插件订阅","PDB":"数据库工具"
+};
+
+var lastResult = null;
+
+var grid = document.getElementById('productGrid');
+PRODUCTS.forEach(function(p, i) {
+  var card = document.createElement('div');
+  card.className = 'card';
+  card.setAttribute('data-code', p.code);
+  card.innerHTML = '<div class="icon">' + p.icon + '</div><div class="name">' + p.name + '</div><div class="code">' + p.code + '</div>';
+  card.onclick = function() { card.classList.toggle('selected'); };
+  grid.appendChild(card);
+});
+
+function getSelectedCodes() {
+  var cards = document.querySelectorAll('.card.selected');
+  if (cards.length === 0) return 'II,PCWMP,PSI';
+  var codes = [];
+  cards.forEach(function(c) { codes.push(c.getAttribute('data-code')); });
+  var all = codes.join(',').split(',');
+  var seen = {};
+  return all.filter(function(x) { return seen[x] ? false : (seen[x] = true); }).join(',');
+}
+
+async function generateLicense() {
+  var server = document.getElementById('serverUrl').value.trim();
+  var body = {
+    assigneeName: document.getElementById('assigneeName').value.trim(),
+    expiryDate: document.getElementById('expiryDate').value.trim() || '2099-12-31',
+    licenseName: document.getElementById('licenseName').value.trim() || 'JetBrain',
+    productCode: getSelectedCodes()
+  };
+
+  try {
+    // 调用 /generateLicense 获取文本激活码 (网站同款)
+    var resp = await fetch(server + '/generateLicense', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var codeText = await resp.text();
+    var parts = codeText.split('-');
+    var jsonStr = atob(parts[1]);
+    var data = JSON.parse(jsonStr);
+
+    // 同时获取 .key 文件
+    var resp2 = await fetch(server + '/generateLicense/file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var buf = await resp2.arrayBuffer();
+    var bytes = new Uint8Array(buf);
+
+    lastResult = { bytes: bytes, data: data, codeText: codeText, body: body };
+
+    // 激活码
+    document.getElementById('codeDisplay').value = codeText;
+    document.getElementById('codeLength').textContent = codeText.length + ' 字符';
+
+    // 许可证卡片
+    document.getElementById('licName').textContent = data.licenseeName;
+    document.getElementById('licAssignee').textContent = data.assigneeName || '(未指定)';
+    document.getElementById('licId').textContent = data.licenseId;
+    document.getElementById('licExpiry').textContent = data.products[0].paidUpTo;
+    document.getElementById('licSize').textContent = bytes.length + ' bytes';
+
+    var codes = data.products.map(function(p) { return p.code; });
+    var labels = codes.map(function(c) {
+      var label = CODE_LABELS[c] || c;
+      return '<span class="badge">' + label + ' (' + c + ')</span>';
+    });
+    document.getElementById('licProducts').innerHTML = labels.join(' ');
+
+    // 技术细节
+    document.getElementById('jsonDisplay').textContent = JSON.stringify(data, null, 2);
+    var hexPart = Array.from(bytes.slice(0, 80)).map(function(b) { return b.toString(16).padStart(2,'0'); }).join(' ');
+    document.getElementById('keyHex').textContent =
+      '文本格式 (网站同款):\n' + codeText.substring(0, 100) + '...\n\n' +
+      '文件格式 (脚本用): UTF-16 LE + U+FFFF BOM (' + bytes.length + ' bytes)\n' +
+      'Hex (前80字节): ' + hexPart;
+
+    document.getElementById('result').classList.add('show');
+    document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+
+  } catch (err) {
+    toast('❌ 生成失败: ' + err.message);
+  }
+}
+
+function downloadKey() {
+  if (!lastResult) return;
+  var blob = new Blob([lastResult.bytes], { type: 'application/octet-stream' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = (lastResult.data.licenseeName || 'license') + '.key';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('✅ 已下载 ' + a.download);
+}
+
+function copyCode() {
+  if (!lastResult) return;
+  navigator.clipboard.writeText(lastResult.codeText).then(function() { toast('✅ 激活码已复制'); });
+}
+
+function copyJson() {
+  if (!lastResult) return;
+  navigator.clipboard.writeText(JSON.stringify(lastResult.data, null, 2))
+    .then(function() { toast('✅ JSON 已复制'); });
+}
+
+function copyCmd(id) {
+  var el = document.getElementById(id);
+  navigator.clipboard.writeText(el.textContent).then(function() { toast('✅ 命令已复制'); });
+}
+
+// 根据 serverUrl 动态生成激活命令
+function updateCommands() {
+  var server = document.getElementById('serverUrl').value.trim() || 'http://localhost:10768';
+  server = server.replace(/\/+$/, '');
+  document.getElementById('cmdWinRun').textContent = 'irm ' + server + ' | iex';
+  document.getElementById('cmdWinFile').textContent = 'irm ' + server + '/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1';
+  document.getElementById('cmdWinOff').textContent = 'irm ' + server + '/export/offline_activate.ps1 -OutFile offline_activate.ps1; .\\offline_activate.ps1';
+  document.getElementById('cmdUnixRun').textContent = 'curl -Ls ' + server + ' | bash';
+  document.getElementById('cmdUnixFile').textContent = 'curl -Ls ' + server + '/export/activate.sh -o activate.sh && bash activate.sh';
+  document.getElementById('cmdUnixOff').textContent = 'curl -Ls ' + server + '/export/offline_activate.sh -o offline_activate.sh && bash offline_activate.sh';
+}
+
+function downloadAll() {
+  var server = document.getElementById('serverUrl').value.trim() || 'http://localhost:10768';
+  server = server.replace(/\/+$/, '');
+  var a = document.createElement('a');
+  a.href = server + '/scripts.zip';
+  a.download = 'ckey-scripts.zip';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('✅ 正在下载 ckey-scripts.zip');
+}
+
+document.getElementById('serverUrl').addEventListener('input', updateCommands);
+
+function toast(msg) {
+  var t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(function() { t.classList.remove('show'); }, 2000);
+}
+
+async function checkServer() {
+  var server = document.getElementById('serverUrl').value.trim();
+  var dot = document.getElementById('statusDot');
+  var txt = document.getElementById('statusText');
+  updateCommands();
+  try {
+    var resp = await fetch(server);
+    if (resp.ok) { dot.className = 'dot on'; txt.textContent = '服务器已连接'; }
+    else throw new Error();
+  } catch(e) {
+    dot.className = 'dot off'; txt.textContent = '服务器未连接 — 请先启动 python local_server.py';
+  }
+}
+
+checkServer();
+</script>
+</body>
+</html>

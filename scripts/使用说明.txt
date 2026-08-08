@@ -1,0 +1,16 @@
+ckey 离线激活脚本包（本地服务器 http://localhost:10768）
+
+Windows PowerShell（管理员）：
+  快捷运行    irm http://localhost:10768 | iex
+  导出运行    irm http://localhost:10768/export/activate.ps1 -OutFile activate.ps1; .\activate.ps1
+  免交互激活  irm http://localhost:10768/export/offline_activate.ps1 -OutFile offline_activate.ps1; .\offline_activate.ps1
+
+Linux / macOS 终端：
+  快捷运行    curl -Ls http://localhost:10768 | bash
+  导出运行    curl -Ls http://localhost:10768/export/activate.sh -o activate.sh && bash activate.sh
+  免交互激活  curl -Ls http://localhost:10768/export/offline_activate.sh -o offline_activate.sh && bash offline_activate.sh
+  调试脚本    bash debug.sh
+  卸载脚本    bash uninstall.sh
+
+免交互激活可用参数：[服务器地址] [许可证名称] [过期日期]
+  bash offline_activate.sh http://192.168.1.5:10768 MyName 2099-12-31
