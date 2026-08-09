@@ -10,8 +10,7 @@ JetBrains 离线激活本地服务器
 
 端点：
     GET  /                              → 浏览器返回操作面板；PowerShell/curl 返回激活脚本（快捷运行，无 BOM）
-    GET  /export/<name>                 → 导出单个脚本（.ps1 保留 UTF-8 BOM，便于 PS 5.1 解析保存的文件；.cmd 为 GBK 编码）
-    GET  /export/offline-pack.zip       → 导出离线激活包（zip：资源+密钥+脚本，解压后即可离线激活）
+    GET  /export/<name>                 → 导出单文件自包含离线脚本（内嵌完整离线包：脚本+资源+密钥，下载后即可离线激活）
     GET  /ja-netfilter/<path>           → 返回 ja-netfilter 资源文件
     POST /generateLicense/file          → 生成并返回 .key 许可证文件
 """
@@ -216,6 +215,165 @@ def generate_license_key_text(assignee_name, expiry_date, license_name, product_
     return f"{raw_hash}-{b64_json}-{sig_b64}-{cert_b64}"
 
 
+# ===================== 单文件自包含离线脚本模板 =====================
+# 模板代码中严禁出现完整标记字符串 __JB_OFFLINE_PACK__ / __JB_OFFLINE_END__
+# （bootstrap 需按原字节在自身文件里定位载荷，标记被拆开写入以避免自匹配）。
+
+_SELFEXTRACT_PS = r'''# Self-extracting offline JetBrains activate script
+# 自解压离线激活脚本（单文件自包含：脚本+资源+密钥全部内嵌，无需服务器、无需仓库配套文件）
+$ErrorActionPreference = 'Stop'
+
+if (-not $PSCommandPath) { $self = $MyInvocation.MyCommand.Path } else { $self = $PSCommandPath }
+if (-not $self) {
+    Write-Host '无法定位自身文件路径。' -ForegroundColor Red
+    Read-Host
+    exit 1
+}
+
+# ---------- 0. 请求管理员权限 ----------
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]'Administrator')
+if (-not $isAdmin) {
+    Write-Host '需要管理员权限，正在请求 UAC 提权...'
+    try {
+        Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$self`"" -Verb RunAs
+    } catch {
+        Write-Host 'UAC 提权被取消，需要管理员权限才能继续。' -ForegroundColor Red
+        Read-Host
+    }
+    exit 0
+}
+
+# ---------- 1. 从自身提取内嵌离线包 ----------
+$mStart = '__JB_OFFLINE_' + 'PACK__'
+$mEnd = '__JB_OFFLINE_' + 'END__'
+try {
+    $raw = [IO.File]::ReadAllBytes($self)
+} catch {
+    Write-Host '无法读取自身文件。' -ForegroundColor Red
+    Read-Host
+    exit 1
+}
+$text = [Text.Encoding]::ASCII.GetString($raw)
+$i = $text.IndexOf($mStart)
+$j = $text.IndexOf($mEnd)
+if ($i -lt 0 -or $j -lt 0) {
+    Write-Host '未找到内嵌离线包，文件可能已损坏。' -ForegroundColor Red
+    Read-Host
+    exit 1
+}
+$mid = $text.Substring($i + $mStart.Length, $j - $i - $mStart.Length)
+$zipBytes = [Convert]::FromBase64String(($mid -replace '\s', ''))
+
+$tmpZip = Join-Path $env:TEMP ('jb-offline-' + [guid]::NewGuid().ToString('N') + '.zip')
+$extract = Join-Path $env:TEMP ('jb-offline-' + [guid]::NewGuid().ToString('N'))
+[IO.File]::WriteAllBytes($tmpZip, $zipBytes)
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[IO.Compression.ZipFile]::ExtractToDirectory($tmpZip, $extract)
+
+# ---------- 2. 以离线模式运行内嵌激活脚本 ----------
+$root = Join-Path $extract 'JetBrain-offline'
+$env:OFFLINE_RESOURCES_DIR = Join-Path $root 'ja-netfilter'
+$env:OFFLINE_LICENSE_SCRIPT = Join-Path $root 'server\generate_license.py'
+$inner = Join-Path $root 'scripts\Windows\activate.ps1'
+
+$rc = 0
+try {
+    $p = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$inner`"" -Wait -PassThru
+    $rc = $p.ExitCode
+} finally {
+    Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue
+}
+exit $rc'''
+
+_SELFEXTRACT_CMD = r'''@echo off
+chcp 936 >nul
+setlocal EnableExtensions
+
+rem ============================================================
+rem  JetBrains 一键激活（Windows CMD）—— 单文件自包含离线版
+rem  本文件已内嵌完整离线包（脚本/资源/密钥），运行即可离线激活，
+rem  不依赖服务器、不依赖仓库配套文件，可直接拷贝到其它机器使用。
+rem ============================================================
+
+rem ---------- 0. 请求管理员权限 ----------
+net session >nul 2>&1
+if errorlevel 1 (
+    echo 需要管理员权限，正在请求 UAC 提权...
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    exit /b 0
+)
+
+rem ---------- 1. 从自身提取内嵌离线包 ----------
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=Join-Path $env:TEMP 'jb-offline-export';if(Test-Path -LiteralPath $d){Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue};$self='%~f0';$t=[IO.File]::ReadAllBytes($self);$s=[Text.Encoding]::ASCII.GetString($t);$b='__JB_OFFLINE_'+'PACK__';$e='__JB_OFFLINE_'+'END__';$i=$s.IndexOf($b);$j=$s.IndexOf($e);if($i -lt 0 -or $j -lt 0){Write-Output 'embedded pack not found';exit 1};$m=$s.Substring($i+$b.Length,$j-$i-$b.Length);$z=[Convert]::FromBase64String(($m -replace '\s',''));$zp=Join-Path $env:TEMP 'jb-offline-export.zip';[IO.File]::WriteAllBytes($zp,$z);Add-Type -AssemblyName System.IO.Compression.FileSystem;[IO.Compression.ZipFile]::ExtractToDirectory($zp,$d)"
+if errorlevel 1 (
+    echo [错误] 解压内嵌离线包失败。
+    pause
+    exit /b 1
+)
+
+rem ---------- 2. 运行内嵌一键激活脚本 ----------
+set "INNER=%TEMP%\jb-offline-export\JetBrain-offline\scripts\Windows\one-click-activate.cmd"
+if not exist "%INNER%" (
+    echo [错误] 离线包内容不完整。
+    pause
+    exit /b 1
+)
+call "%INNER%"
+set "RC=%errorlevel%"
+
+rem ---------- 3. 清理临时文件 ----------
+cd /d "%TEMP%"
+rmdir /s /q "%TEMP%\jb-offline-export" >nul 2>&1
+del /f /q "%TEMP%\jb-offline-export.zip" >nul 2>&1
+
+exit /b %RC%'''
+
+_SELFEXTRACT_SH = r'''#!/bin/bash
+# Self-extracting offline JetBrains activate script
+# 自解压离线激活脚本（单文件自包含：脚本+资源+密钥全部内嵌，无需服务器、无需仓库配套文件）
+
+set -e
+
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "[错误] 未找到 python3。离线激活需要 Python 3.8+（用于生成许可证）。" >&2
+    exit 1
+fi
+
+python3 - "$SELF" "$TMPDIR" <<'PYEOF'
+import base64, io, sys, zipfile
+self_path, dest = sys.argv[1], sys.argv[2]
+begin = b'__JB_OFFLINE_' + b'PACK__'
+end = b'__JB_OFFLINE_' + b'END__'
+data = open(self_path, 'rb').read()
+i = data.find(begin)
+j = data.find(end, i)
+if i == -1 or j == -1:
+    sys.stderr.write('[错误] 未找到内嵌离线包，文件可能已损坏。\n')
+    sys.exit(1)
+b64 = data[i + len(begin):j].replace(b'\r', b'').replace(b'\n', b'')
+with zipfile.ZipFile(io.BytesIO(base64.b64decode(b64))) as zf:
+    zf.extractall(dest)
+PYEOF
+
+ROOT="$TMPDIR/JetBrain-offline"
+export OFFLINE_RESOURCES_DIR="$ROOT/ja-netfilter"
+export OFFLINE_LICENSE_SCRIPT="$ROOT/server/generate_license.py"
+
+if [ ! -f "$ROOT/scripts/Linux-macOS/activate.sh" ]; then
+    echo "[错误] 离线包内容不完整。" >&2
+    exit 1
+fi
+
+bash "$ROOT/scripts/Linux-macOS/activate.sh"
+RC=$?
+exit $RC'''
+
+
 # ===================== HTTP 请求处理器 =====================
 
 class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
@@ -326,56 +484,20 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(content)
         print(f"  → 200 OK ({len(content)} bytes) - script (URLs rewritten to {local_base})")
 
-    _EXPORT_FILES = {
-        "activate.ps1":          ("Windows/activate.ps1", True),
-        "one-click-activate.cmd": ("Windows/one-click-activate.cmd", False),
-        "activate.sh":           ("Linux-macOS/activate.sh", False),
-    }
+    _EXPORT_NAMES = ("activate.ps1", "one-click-activate.cmd", "activate.sh")
 
-    def _send_export(self, name):
-        """导出单个脚本：.ps1 保留 UTF-8 BOM，便于 PS 5.1 解析保存到磁盘的文件。"""
-        entry = self._EXPORT_FILES.get(name)
-        if entry is None:
-            self.send_response(404)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"Script not found")
-            print(f"  → 404 Not Found - export/{name}")
-            return
+    def _build_offline_pack(self):
+        """构建离线包（内存 zip）：脚本 + ja-netfilter 资源树 + 许可证生成器 + 预生成密钥。
 
-        disk_name, is_ps = entry
-        content = self._read_rewritten(os.path.join(SCRIPTS_DIR, disk_name))
-        if content is None:
-            self.send_response(404)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"Script not found")
-            print(f"  → 404 Not Found - export/{name}")
-            return
-
-        if is_ps and not content.startswith(b"\xef\xbb\xbf"):
-            content = b"\xef\xbb\xbf" + content
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
-        self.send_header("Content-Length", len(content))
-        self.end_headers()
-        self.wfile.write(content)
-        print(f"  → 200 OK ({len(content)} bytes) - export/{name}")
-
-    def _send_offline_pack(self):
-        """导出离线激活包（zip）：激活脚本 + ja-netfilter 资源树 + 许可证生成器 + 预生成密钥。
-
-        解压到任意目录后运行 activate 脚本即自动进入离线模式激活，
+        缺少 keys/ 密钥时返回 None。该 zip 被内嵌进自包含离线导出脚本
+        （activate.ps1 / one-click-activate.cmd / activate.sh），由脚本解压后离线激活，
         不依赖服务器在线、不依赖仓库配套文件。"""
         import zipfile
         from io import BytesIO
 
         if not (os.path.isfile(os.path.join(KEYS_DIR, "private.pem"))
                 and os.path.isfile(os.path.join(KEYS_DIR, "cert.der"))):
-            self._send_error(400, "keys/ 密钥不存在，请先运行 python scripts/generate_keys.py "
-                                  "生成密钥后再导出离线激活包。")
-            return
+            return None
 
         root = "JetBrain-offline"
         files = [
@@ -407,14 +529,47 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
                 if os.path.isfile(src):
                     zf.write(src, f"{root}/keys/{kf}")
 
-        content = buf.getvalue()
+        return buf.getvalue()
+
+    def _render_self_extracting(self, name, pack_bytes):
+        """把离线包 base64 内嵌进脚本，生成单文件自包含的自解压脚本。
+
+        .ps1 为 UTF-8 BOM + 块注释包裹载荷（PowerShell 整文件解析）；.cmd 为 GBK + CRLF；
+        .sh 为 UTF-8。载荷放在脚本末尾，cmd/bash 惰性读取不会解析它们。"""
+        b64 = base64.b64encode(pack_bytes)
+        lines = b"\n".join(b64[i:i + 76] for i in range(0, len(b64), 76))
+        payload = b"__JB_OFFLINE_PACK__\n" + lines + b"\n__JB_OFFLINE_END__\n"
+
+        if name == "activate.ps1":
+            return ("﻿" + _SELFEXTRACT_PS + "\n<#\n").encode("utf-8") + payload + b"#>\n"
+        if name == "one-click-activate.cmd":
+            return _SELFEXTRACT_CMD.replace("\n", "\r\n").encode("gbk") + b"\r\n" + payload
+        return _SELFEXTRACT_SH.encode("utf-8") + b"\n" + payload
+
+    def _send_export(self, name):
+        """导出单文件自包含离线激活脚本（内嵌完整离线包，下载后即可离线使用，不依赖其它文件）。"""
+        if name not in self._EXPORT_NAMES:
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Script not found")
+            print(f"  → 404 Not Found - export/{name}")
+            return
+
+        pack = self._build_offline_pack()
+        if pack is None:
+            self._send_error(400, "keys/ 密钥不存在，请先运行 python scripts/generate_keys.py "
+                                  "生成密钥后再导出离线脚本。")
+            return
+
+        content = self._render_self_extracting(name, pack)
         self.send_response(200)
-        self.send_header("Content-Type", "application/zip")
-        self.send_header("Content-Disposition", 'attachment; filename="JetBrain-offline.zip"')
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
         self.send_header("Content-Length", len(content))
         self.end_headers()
         self.wfile.write(content)
-        print(f"  → 200 OK ({len(content)} bytes) - export/offline-pack.zip")
+        print(f"  → 200 OK ({len(content)} bytes) - export/{name} (self-extracting offline)")
 
     def _generate_license(self):
         """处理许可证生成请求"""
@@ -493,10 +648,7 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
 
         elif path.startswith("/export/"):
             name = path[len("/export/"):]
-            if name == "offline-pack.zip":
-                self._send_offline_pack()
-            else:
-                self._send_export(name)
+            self._send_export(name)
 
         elif path.startswith("/ja-netfilter/"):
             # 提供 ja-netfilter 资源文件
@@ -764,7 +916,6 @@ def main():
     print("  可用端点:")
     print(f"    GET  http://{args.host}:{args.port}/")
     print(f"    GET  http://{args.host}:{args.port}/export/<name>")
-    print(f"    GET  http://{args.host}:{args.port}/export/offline-pack.zip")
     print(f"    POST http://{args.host}:{args.port}/generateLicense/file")
     print(f"    GET  http://{args.host}:{args.port}/ja-netfilter/<path>")
     print()
@@ -773,14 +924,10 @@ def main():
     print(f"    curl -Ls http://{args.host}:{args.port} | bash")
     print(f"    # 快捷运行 Windows PowerShell (右键管理员运行):")
     print(f"    irm http://{args.host}:{args.port} | iex")
-    print(f"    # 导出为本地脚本 Linux/Mac:")
+    print(f"    # 导出为单文件离线脚本（内嵌资源与密钥，下载后即可离线激活，无需服务器）:")
     print(f"    curl -Ls http://{args.host}:{args.port}/export/activate.sh -o activate.sh && bash activate.sh")
-    print(f"    # 导出为本地脚本 Windows PowerShell:")
     print(f"    irm http://{args.host}:{args.port}/export/activate.ps1 -OutFile activate.ps1; .\\activate.ps1")
-    print(f"    # 导出为本地脚本 Windows CMD:")
     print(f"    curl -Ls http://{args.host}:{args.port}/export/one-click-activate.cmd -o one-click-activate.cmd && one-click-activate.cmd")
-    print(f"    # 导出离线激活包（zip：含资源与密钥，解压后即可离线激活，无需服务器）:")
-    print(f"    curl -Ls http://{args.host}:{args.port}/export/offline-pack.zip -o JetBrain-offline.zip && unzip JetBrain-offline.zip && bash JetBrain-offline/scripts/Linux-macOS/activate.sh")
     print()
     print("  按 Ctrl+C 停止服务器")
     print("=" * 60)

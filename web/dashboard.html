@@ -27,10 +27,15 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
   .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .dot.off { background: var(--red); }
-  main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px; }
   h2 { font-size: 1.1rem; margin: 28px 0 14px; color: var(--accent); }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .card.select-all { border-style: dashed; }
+  .card.select-all .name { color: var(--accent); }
+  .card.select-all.selected { border-style: solid; border-color: var(--green); background: #2a3a2e; }
+  .card.select-all.selected .name { color: var(--green); }
+  .sel-count { font-size: .78rem; font-weight: 400; color: var(--sub); margin-left: 10px; }
   .card {
     background: var(--card); border: 2px solid var(--border); border-radius: var(--radius);
     padding: 16px; cursor: pointer; transition: all .15s; text-align: center; user-select: none;
@@ -92,7 +97,8 @@
     width: 100%; background: var(--input); color: var(--green);
     border: 1px solid var(--border); border-radius: 8px; padding: 12px;
     font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
-    font-size: .75rem; resize: vertical; min-height: 60px; word-break: break-all;
+    font-size: .82rem; line-height: 1.65; resize: vertical;
+    min-height: 120px; word-break: break-all;
   }
   .code-box .hint { color: var(--sub); font-size: .75rem; margin-top: 6px; }
 
@@ -144,7 +150,7 @@
 </header>
 
 <main>
-  <h2>① 选择要激活的产品</h2>
+  <h2>① 选择要激活的产品 <span class="sel-count" id="selCount">未选择（默认 IntelliJ IDEA）</span></h2>
   <div class="grid" id="productGrid"></div>
 
   <h2>② 许可证参数</h2>
@@ -166,6 +172,13 @@
 
   <!-- 结果 -->
   <div id="result">
+    <!-- 操作按钮：放在激活码前面，复制激活码最前并高亮 -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button class="copy" onclick="copyCode()">📋 复制激活码</button>
+      <button class="secondary small" onclick="downloadKey()">⬇ 下载 .key 文件</button>
+      <button class="secondary small" onclick="copyJson()">📋 复制 JSON</button>
+    </div>
+
     <!-- 激活码（网站同款格式） -->
     <div class="code-box">
       <div class="label">🔑 激活码（JetBrains 许可证格式，<span id="codeLength">-</span>）</div>
@@ -192,12 +205,6 @@
       也可下载 <code>.key</code> 二进制文件直接放到 IDE 配置目录。
     </div>
 
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-      <button class="copy" onclick="downloadKey()">⬇ 下载 .key 文件</button>
-      <button class="secondary small" onclick="copyCode()">📋 复制激活码</button>
-      <button class="secondary small" onclick="copyJson()">📋 复制 JSON</button>
-    </div>
-
     <details>
       <summary>🔧 查看技术细节（JSON + Hex）</summary>
       <pre id="jsonDisplay" style="color:var(--green)"></pre>
@@ -207,35 +214,30 @@
 
   <!-- 激活命令 -->
   <h2>③ 一键激活命令（注入 ja-netfilter）</h2>
-  <p class="sec-hint">每端都有两种用法：<strong>快捷运行</strong>（不落地脚本，管道直接执行）与 <strong>导出为本地脚本</strong>（仅下载保存，不自动运行，可审阅后自行运行）。</p>
+  <p class="sec-hint">每端都有两种用法：<strong>快捷运行</strong>（不落地脚本，管道直接执行）与 <strong>导出为单文件离线脚本</strong>（内嵌全部资源与密钥，下载保存后即可离线激活，不依赖服务器与其他文件）。</p>
   <div class="cmd-grid">
     <div class="cmd-item">
-      <div class="label">🪟 Windows PowerShell（右键管理员运行）</div>
+      <div class="label">🪟 Windows PowerShell / CMD（右键管理员运行）</div>
       <div class="mode">快捷运行（不保存文件）:</div>
       <code id="cmdWinRun"></code>
       <button class="copy small" onclick="copyCmd('cmdWinRun')">复制命令</button>
-      <div class="mode">导出为本地脚本（仅下载，不运行）:</div>
+      <div class="mode">导出为单文件离线脚本（内嵌全部资源与密钥，下载后即可离线激活，无需服务器、不依赖其他文件）:</div>
       <button class="copy small" onclick="downloadExport('activate.ps1')">⬇ 下载 activate.ps1</button>
       <code id="cmdWinFile"></code>
       <button class="copy small" onclick="copyCmd('cmdWinFile')">复制命令</button>
+      <button class="copy small" onclick="downloadExport('one-click-activate.cmd')">⬇ 下载 one-click-activate.cmd</button>
+      <code id="cmdWinCmdFile"></code>
+      <button class="copy small" onclick="copyCmd('cmdWinCmdFile')">复制命令</button>
     </div>
     <div class="cmd-item">
       <div class="label">🐧 Linux / 🍎 macOS 终端</div>
       <div class="mode">快捷运行（不保存文件）:</div>
       <code id="cmdUnixRun"></code>
       <button class="copy small" onclick="copyCmd('cmdUnixRun')">复制命令</button>
-      <div class="mode">导出为本地脚本（仅下载，不运行）:</div>
+      <div class="mode">导出为单文件离线脚本（内嵌全部资源与密钥，下载后即可离线激活，无需服务器、不依赖其他文件）:</div>
       <button class="copy small" onclick="downloadExport('activate.sh')">⬇ 下载 activate.sh</button>
       <code id="cmdUnixFile"></code>
       <button class="copy small" onclick="copyCmd('cmdUnixFile')">复制命令</button>
-    </div>
-    <div class="cmd-item">
-      <div class="label">📦 离线激活包（zip）</div>
-      <div class="mode">浏览器直接下载（含全部脚本、资源与密钥，解压后即可离线激活，不依赖服务器）:</div>
-      <button class="copy" onclick="downloadOfflinePack()">⬇ 下载离线激活包（zip）</button>
-      <div class="mode">命令行下载:</div>
-      <code id="cmdOfflinePack"></code>
-      <button class="copy small" onclick="copyCmd('cmdOfflinePack')">复制命令</button>
     </div>
   </div>
 </main>
@@ -272,18 +274,50 @@ PRODUCTS.forEach(function(p, i) {
   card.className = 'card';
   card.setAttribute('data-code', p.code);
   card.innerHTML = '<div class="icon">' + p.icon + '</div><div class="name">' + p.name + '</div><div class="code">' + p.code + '</div>';
-  card.onclick = function() { card.classList.toggle('selected'); };
+  card.onclick = function() { card.classList.toggle('selected'); updateSelCount(); };
   grid.appendChild(card);
 });
 
+var selectAllCard = document.createElement('div');
+selectAllCard.className = 'card select-all';
+selectAllCard.id = 'selectAllCard';
+selectAllCard.innerHTML = '<div class="icon">☑️</div><div class="name">全选</div><div class="code">全部产品</div>';
+selectAllCard.onclick = toggleSelectAll;
+grid.appendChild(selectAllCard);
+
 function getSelectedCodes() {
-  var cards = document.querySelectorAll('.card.selected');
+  var cards = document.querySelectorAll('.card.selected:not(.select-all)');
   if (cards.length === 0) return 'II,PCWMP,PSI';
   var codes = [];
   cards.forEach(function(c) { codes.push(c.getAttribute('data-code')); });
   var all = codes.join(',').split(',');
   var seen = {};
   return all.filter(function(x) { return seen[x] ? false : (seen[x] = true); }).join(',');
+}
+
+function productCards() {
+  return Array.prototype.slice.call(document.querySelectorAll('.card:not(.select-all)'));
+}
+
+function updateSelCount() {
+  var cards = productCards();
+  var n = cards.filter(function(c) { return c.classList.contains('selected'); }).length;
+  var all = cards.length > 0 && n === cards.length;
+  document.getElementById('selCount').textContent =
+    n ? ('已选 ' + n + ' 项') : '未选择（默认 IntelliJ IDEA）';
+  var btn = document.getElementById('selectAllCard');
+  btn.classList.toggle('selected', all);
+  btn.querySelector('.name').textContent = all ? '取消全选' : '全选';
+}
+
+function toggleSelectAll() {
+  var cards = productCards();
+  var allSelected = cards.length > 0 &&
+    cards.every(function(c) { return c.classList.contains('selected'); });
+  cards.forEach(function(c) {
+    if (allSelected) { c.classList.remove('selected'); } else { c.classList.add('selected'); }
+  });
+  updateSelCount();
 }
 
 async function generateLicense() {
@@ -346,7 +380,6 @@ async function generateLicense() {
       'Hex (前80字节): ' + hexPart;
 
     document.getElementById('result').classList.add('show');
-    document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
 
   } catch (err) {
     toast('❌ 生成失败: ' + err.message);
@@ -393,8 +426,6 @@ function downloadFile(urlPath, saveName) {
   toast('⬇ 已下载 ' + saveName);
 }
 
-function downloadOfflinePack() { downloadFile('/export/offline-pack.zip', 'JetBrain-offline.zip'); }
-
 function downloadExport(name) { downloadFile('/export/' + name, name); }
 
 // 根据 serverUrl 动态生成激活命令
@@ -403,9 +434,9 @@ function updateCommands() {
   server = server.replace(/\/+$/, '');
   document.getElementById('cmdWinRun').textContent = 'irm ' + server + ' | iex';
   document.getElementById('cmdWinFile').textContent = 'irm ' + server + '/export/activate.ps1 -OutFile activate.ps1';
+  document.getElementById('cmdWinCmdFile').textContent = 'curl -Ls ' + server + '/export/one-click-activate.cmd -o one-click-activate.cmd';
   document.getElementById('cmdUnixRun').textContent = 'curl -Ls ' + server + ' | bash';
   document.getElementById('cmdUnixFile').textContent = 'curl -Ls ' + server + '/export/activate.sh -o activate.sh';
-  document.getElementById('cmdOfflinePack').textContent = 'curl -Ls ' + server + '/export/offline-pack.zip -o JetBrain-offline.zip';
 }
 
 document.getElementById('serverUrl').addEventListener('input', updateCommands);
