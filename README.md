@@ -7,13 +7,13 @@
 
 ## 项目依赖
 
-Python 只在**本仓库所在机器**需要（生成密钥、签发许可证、导出离线脚本）；**导出的单文件离线激活脚本在目标机器上完全无需 Python**，也无需服务器在线。
+Python 只在**本仓库所在机器**需要（生成密钥、重新内嵌许可证、服务器模式）；仓库内置的**一键激活脚本已内嵌预生成许可证，在目标机器上完全无需 Python**，也无需服务器在线。
 
-- **Python 3.8+**（仅本机）：生成密钥、签发许可证与导出离线脚本时需要；Windows 安装时建议勾选 “Add python.exe to PATH”
-- **Python 依赖**：`pip install -r requirements.txt`（实际仅需要 `cryptography`，一键脚本会自动安装）
+- **Python 3.8+**（仅本机）：生成密钥、重新内嵌许可证与服务器模式时需要；Windows 安装时建议勾选 “Add python.exe to PATH”
+- **Python 依赖**：`pip install -r requirements.txt`（实际仅需要 `cryptography`，仅本机运行 `scripts/generate_keys.py` / `scripts/embed_licenses.py` 时用到；一键脚本不依赖 Python）
 - **Windows**：PowerShell 5.1+ 或 CMD，二者均可一键激活（脚本会自动申请管理员权限）
 - **Linux / macOS**：bash
-- 首次使用前先生成 `keys/`（见「手动方式 · 生成密钥」；一键激活脚本会自动完成这一步）
+- 仓库内三个一键脚本已内嵌 12 款产品的预生成许可证（固定身份：许可证名称 `JetBrain`、被授权人为空、有效期至 `2099-12-31`），开箱即用；仅在轮换 `keys/` 私钥后需按「手动方式 · 重新内嵌许可证」刷新
 
 ## 支持的 IDE
 
@@ -36,7 +36,7 @@ Python 只在**本仓库所在机器**需要（生成密钥、签发许可证、
 
 ## 快速开始（一键激活）
 
-一条命令完成「生成密钥 → 激活 IDE」全流程，**全程不启动服务器**，脚本幂等，可重复运行。
+一条命令完成「解压内嵌许可证 → 激活 IDE」全流程，**全程不启动服务器**，脚本幂等，可重复运行。
 
 **在哪运行**：在仓库根目录（`JetBrain_crack/`）打开终端运行。脚本会自动定位到仓库根目录，
 因此从任一位置运行也能工作，但推荐在仓库根目录执行。
@@ -71,11 +71,11 @@ bash scripts/Linux-macOS/one-click-activate.sh
 
 脚本会按顺序执行：
 
-1. **生成/补齐密钥**：运行 `scripts/generate_keys.py`，生成 RSA 私钥、证书并校准 `power.conf`
-   （幂等，已有密钥则跳过，不影响之前激活过的 IDE）；
+1. **解压内嵌许可证**：从脚本自身提取预生成的 12 款产品 `.key` 许可证到临时目录
+   （目标机器无需 Python、无需生成密钥，用固定身份预先签发）；
 2. **激活 IDE**：以离线方式执行 `activate.ps1` / `activate.sh`——ja-netfilter 及插件从仓库
-   本地 `ja-netfilter/` 复制，许可证由本地密钥经 `server/generate_license.py` 离线生成，
-   全程不启动本地服务器。按提示选择产品并填写许可证信息即可。
+   本地 `ja-netfilter/` 复制，许可证直接使用第 1 步解压出的内嵌许可证，
+   全程不启动本地服务器。按提示选择产品即可。
 
 > **提示：部分 IDE 激活失败时**
 >
@@ -96,12 +96,13 @@ JetBrain_crack/
 │   └── dashboard.html             # 服务器模式浏览器访问 / 时显示的操作面板
 ├── scripts/
 │   ├── generate_keys.py           # 生成 keys/ 密钥与证书并校准 power.conf（离线，幂等）
+│   ├── embed_licenses.py          # 将预生成许可证内嵌进三个一键脚本（轮换密钥后重新运行）
 │   ├── Windows/
-│   │   ├── one-click-activate.ps1   # Windows 一键激活（PowerShell，含密钥生成，离线）
-│   │   ├── one-click-activate.cmd   # Windows 一键激活（CMD，含密钥生成，离线）
+│   │   ├── one-click-activate.ps1   # Windows 一键激活（PowerShell，内嵌预生成许可证，离线）
+│   │   ├── one-click-activate.cmd   # Windows 一键激活（CMD，内嵌预生成许可证，离线）
 │   │   └── activate.ps1           # Windows 交互式激活脚本（离线 / 服务器双模式）
 │   └── Linux-macOS/
-│       ├── one-click-activate.sh    # Linux/macOS 一键激活（含密钥生成，离线，不启动服务器）
+│       ├── one-click-activate.sh    # Linux/macOS 一键激活（内嵌预生成许可证，离线，不启动服务器）
 │       └── activate.sh            # Linux/macOS 交互式激活脚本（离线 / 服务器双模式）
 ├── ja-netfilter/                  # ja-netfilter 部署资源（离线激活时从此目录复制）
 │   ├── ja-netfilter.jar
@@ -211,6 +212,21 @@ Windows 仅需 PowerShell 5.1+ 或 CMD；Linux / macOS 仅需 bash（自解压�
 
 端口冲突处理：启动前会先探测端口占用情况，若占用者是本服务残留实例（命令行含
 `local_server.py`）会自动结束并用原端口重启；若是其它程序则改用随机可用端口启动并告知。
+
+### 4. 重新内嵌许可证（轮换密钥后）
+
+一键脚本内嵌的许可证由本机 `keys/` 私钥预先签发。若重新生成了 `keys/`
+（`python scripts/generate_keys.py --force`），已内嵌的旧许可证将失效，需刷新三个一键脚本：
+
+```bash
+python scripts/embed_licenses.py        # 内嵌（默认）
+python scripts/embed_licenses.py verify # 校验内嵌载荷能否解出 12 个 .key
+```
+
+`embed_licenses.py` 用当前 `keys/` 重新签发 12 款产品的许可证（固定身份：许可证名称 `JetBrain`、
+被授权人为空、有效期至 `2099-12-31`），打包 base64 后内嵌到
+`scripts/Windows/one-click-activate.ps1`、`one-click-activate.cmd` 与
+`scripts/Linux-macOS/one-click-activate.sh`，目标机器无需 Python。
 
 ## 激活原理（power.conf）
 
