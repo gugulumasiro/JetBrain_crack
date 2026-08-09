@@ -752,6 +752,22 @@ function Create_Key([hashtable]$product, [string]$prd_full_name, [string]$custom
         Remove-Item -Path $file_key -Force
     }
 
+    # 预生成许可证模式（离线导出包内嵌 licenses/<name>.key，目标机器无需 Python）
+    if ($script:offline_licenses_dir)
+    {
+        $file_pregen = Join-Path -Path $script:offline_licenses_dir "$( $product.name ).key"
+        if (Test-Path -LiteralPath $file_pregen)
+        {
+            Copy-Item -LiteralPath $file_pregen -Destination $file_key -Force
+            $msg = Get-i18nString "writing_key"
+            Debug ($msg -f $file_key)
+            Process_Disabled_Plugins($file_disable_plugins)
+            $msg = Get-i18nString "activation_success"
+            Success ($msg -f $prd_full_name)
+            return
+        }
+    }
+
     $json_body = ConvertTo-Json -InputObject @{
         assigneeName = $script:license.assigneeName
         expiryDate = $script:license.expiryDate
@@ -949,13 +965,15 @@ function Main
     $script:url_license = "$script:url_base/generateLicense/file"
 
     # 离线模式。判定优先级：显式环境变量 > -Offline 参数 > 自动检测仓库位置。
-    #   OFFLINE_RESOURCES_DIR  仓库内 ja-netfilter/ 目录，资源改从本地复制而非 HTTP
-    #   OFFLINE_LICENSE_CMD    python 可执行程序
-    #   OFFLINE_LICENSE_SCRIPT 离线许可证生成器 server/generate_license.py
+    #   OFFLINE_RESOURCES_DIR   仓库内 ja-netfilter/ 目录，资源改从本地复制而非 HTTP
+    #   OFFLINE_LICENSE_CMD     python 可执行程序（无预生成许可证时才需要）
+    #   OFFLINE_LICENSE_SCRIPT  离线许可证生成器 server/generate_license.py
+    #   OFFLINE_LICENSES_DIR    预生成许可证目录 licenses/（离线导出包内嵌，目标机器无需 Python）
     # 自动检测：脚本位于仓库 scripts\Windows\ 时，其上级两级即仓库根目录。
     $script:offline_resources_dir = $env:OFFLINE_RESOURCES_DIR
     $script:offline_license_cmd = $env:OFFLINE_LICENSE_CMD
     $script:offline_license_script = $env:OFFLINE_LICENSE_SCRIPT
+    $script:offline_licenses_dir = $env:OFFLINE_LICENSES_DIR
 
     if ([string]::IsNullOrWhiteSpace($script:offline_resources_dir))
     {
@@ -986,9 +1004,10 @@ function Main
     }
 
     if (-not [string]::IsNullOrWhiteSpace($script:offline_resources_dir) -and
-        [string]::IsNullOrWhiteSpace($script:offline_license_cmd))
+        [string]::IsNullOrWhiteSpace($script:offline_license_cmd) -and
+        [string]::IsNullOrWhiteSpace($script:offline_licenses_dir))
     {
-        # 离线需本地 Python 生成许可证
+        # 离线需本地 Python 生成许可证（预生成许可证模式下无需）
         $script:offline_license_cmd = Find-Python
         if ([string]::IsNullOrWhiteSpace($script:offline_license_cmd))
         {
@@ -1040,7 +1059,11 @@ function Main
     }
 
     # 开始执行主流程
-    Read_Host_License_Info
+    # 预生成许可证模式使用固定身份（JetBrain / 空 / 2099-12-31），无需交互填写
+    if ([string]::IsNullOrWhiteSpace($script:offline_licenses_dir))
+    {
+        Read_Host_License_Info
+    }
     Log (Get-i18nString "processing")
 
     Remove_Env -env_scope "User" -products $script:sPrds

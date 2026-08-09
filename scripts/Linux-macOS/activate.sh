@@ -438,11 +438,13 @@ URL_DOWNLOAD="${URL_BASE}/ja-netfilter"
 URL_LICENSE="${URL_BASE}/generateLicense/file"
 
 # 离线模式。判定优先级：显式环境变量 > --offline 参数 > 自动检测仓库位置。
-#   OFFLINE_RESOURCES_DIR  仓库内 ja-netfilter/ 目录，资源改从本地复制而非 HTTP
-#   OFFLINE_LICENSE_CMD    python 可执行程序
-#   OFFLINE_LICENSE_SCRIPT 离线许可证生成器 server/generate_license.py
+#   OFFLINE_RESOURCES_DIR   仓库内 ja-netfilter/ 目录，资源改从本地复制而非 HTTP
+#   OFFLINE_LICENSES_DIR    预生成许可证目录（内嵌 licenses/<name>.key，目标机器无需 Python）
+#   OFFLINE_LICENSE_CMD     python 可执行程序（仅仓库内 Python 离线模式需要）
+#   OFFLINE_LICENSE_SCRIPT  离线许可证生成器 server/generate_license.py（同上）
 # 自动检测与 --offline 参数解析在下方“离线模式解析”执行（需等 error 函数定义完成）。
 OFFLINE_RESOURCES_DIR="${OFFLINE_RESOURCES_DIR:-}"
+OFFLINE_LICENSES_DIR="${OFFLINE_LICENSES_DIR:-}"
 OFFLINE_LICENSE_CMD="${OFFLINE_LICENSE_CMD:-}"
 OFFLINE_LICENSE_SCRIPT="${OFFLINE_LICENSE_SCRIPT:-}"
 
@@ -491,27 +493,27 @@ else
     NC=''
 fi
 
-# 产品列表
-PRODUCTS='[
-    {"name":"idea","productCode":"II,PCWMP,PSI"},
-    {"name":"clion","productCode":"CL,PSI,PCWMP"},
-    {"name":"phpstorm","productCode":"PS,PCWMP,PSI"},
-    {"name":"goland","productCode":"GO,PSI,PCWMP"},
-    {"name":"pycharm","productCode":"PC,PSI,PCWMP"},
-    {"name":"webstorm","productCode":"WS,PCWMP,PSI"},
-    {"name":"rider","productCode":"RD,PDB,PSI,PCWMP"},
-    {"name":"datagrip","productCode":"DB,PSI,PDB"},
-    {"name":"rubymine","productCode":"RM,PCWMP,PSI"},
-    {"name":"appcode","productCode":"AC,PCWMP,PSI"},
-    {"name":"dataspell","productCode":"DS,PSI,PDB,PCWMP"},
-    {"name":"rustrover","productCode":"RR,PSI,PCWP"}
-]'
+# 产品列表（name|productCode）
+PRODUCTS=(
+    "idea|II,PCWMP,PSI"
+    "clion|CL,PSI,PCWMP"
+    "phpstorm|PS,PCWMP,PSI"
+    "goland|GO,PSI,PCWMP"
+    "pycharm|PC,PSI,PCWMP"
+    "webstorm|WS,PCWMP,PSI"
+    "rider|RD,PDB,PSI,PCWMP"
+    "datagrip|DB,PSI,PDB"
+    "rubymine|RM,PCWMP,PSI"
+    "appcode|AC,PCWMP,PSI"
+    "dataspell|DS,PSI,PDB,PCWMP"
+    "rustrover|RR,PSI,PCWP"
+)
 
 # ============ 工具函数 =============
 
 # ============ 日期验证 =============
 check_and_install_deps() {
-    local deps=("curl" "jq")
+    local deps=("curl")
     local missing=()
 
     for dep in "${deps[@]}"; do
@@ -594,14 +596,6 @@ check_and_install_deps() {
     done
 
     success "all_deps_installed_success"
-}
-
-# ============ 解析产品 =============
-parse_product_from_json() {
-    local index="$1"
-    local name=$(echo "$PRODUCTS" | jq -r ".[$index].name")
-    local code=$(echo "$PRODUCTS" | jq -r ".[$index].productCode")
-    echo "$name|$code"
 }
 
 # ============ 日志函数 =============
@@ -745,8 +739,7 @@ remove_env_item_vars() {
     )
 
     # 解析产品
-    local index=0
-    local product_count=$(echo "$PRODUCTS" | jq length)
+    local product_count=${#PRODUCTS[@]}
 
     # 先过滤出实际存在的文件
     local existing_files=()
@@ -780,7 +773,7 @@ remove_env_item_vars() {
         # 检测环境变量配置文件
         local index=0
         while [ $index -lt $product_count ]; do
-            IFS='|' read -r name code <<< "$(parse_product_from_json "$index")"
+            IFS='|' read -r name code <<< "${PRODUCTS[$index]}"
 
             if [ -z "$name" ]; then
                 break
@@ -842,15 +835,6 @@ read_license_info() {
         fi
     done
 
-    LICENSE_JSON=$(cat <<EOF
-{
-  "assigneeName": "",
-  "expiryDate": "$expiry",
-  "licenseName": "$license_name",
-  "productCode": ""
-}
-EOF
-)
 }
 
 # ============ 创建工作目录 =============
@@ -1049,19 +1033,27 @@ generate_license() {
 
     [ -f "$file_license" ] && rm -f "$file_license"
 
-    local json_body=$(jq --arg code "$obj_product_code" '.productCode = $code' <<< "$LICENSE_JSON")
-
     local rc
-    if [ -n "${OFFLINE_LICENSE_CMD}" ] && [ -n "${OFFLINE_LICENSE_SCRIPT}" ]; then
+    if [ -n "${OFFLINE_LICENSES_DIR}" ]; then
+        # 预生成许可证模式：直接拷贝内嵌的 <name>.key（目标机器无需 Python、无需输入授权信息）
+        if [ -f "${OFFLINE_LICENSES_DIR}/${obj_product_name}.key" ]; then
+            cp "${OFFLINE_LICENSES_DIR}/${obj_product_name}.key" "$file_license"
+            rc=0
+        else
+            warning "manual_activation_required" "$dir_product_name"
+            return
+        fi
+    elif [ -n "${OFFLINE_LICENSE_CMD}" ] && [ -n "${OFFLINE_LICENSE_SCRIPT}" ]; then
         # 离线模式：调用本地许可证生成器（不启动服务器）
         "${OFFLINE_LICENSE_CMD}" "${OFFLINE_LICENSE_SCRIPT}" \
-            --product-code "$(jq -r '.productCode' <<< "${json_body}")" \
-            --license-name "$(jq -r '.licenseName' <<< "${json_body}")" \
-            --expiry "$(jq -r '.expiryDate' <<< "${json_body}")" \
-            --assignee "$(jq -r '.assigneeName' <<< "${json_body}")" \
+            --product-code "$obj_product_code" \
+            --license-name "$license_name" \
+            --expiry "$expiry" \
+            --assignee "" \
             -o "${file_license}"
         rc=$?
     else
+        local json_body=$(printf '{"assigneeName":"","expiryDate":"%s","licenseName":"%s","productCode":"%s"}' "$expiry" "$license_name" "$obj_product_code")
         debug "url_license_params" "$URL_LICENSE" "$json_body" "$file_license"
         curl -s -X POST "$URL_LICENSE" \
             -H "Content-Type: application/json" \
@@ -1084,8 +1076,8 @@ handle_jetbrains_dir() {
     local obj_product_name=""
     local obj_product_code=""
 
-    for ((i = 0; i < $(echo "$PRODUCTS" | jq length); i++)); do
-        IFS='|' read -r name code <<< "$(parse_product_from_json "$i")"
+    for ((i = 0; i < ${#PRODUCTS[@]}; i++)); do
+        IFS='|' read -r name code <<< "${PRODUCTS[$i]}"
         local lowercase_dir=$(echo "${dir_product_name}" | tr '[:upper:]' '[:lower:]')
         if [[ "$lowercase_dir" == *"$name"* ]]; then
             obj_product_name="$name"
@@ -1177,8 +1169,8 @@ if [ -z "${OFFLINE_RESOURCES_DIR}" ]; then
     fi
 fi
 
-if [ -n "${OFFLINE_RESOURCES_DIR}" ] && [ -z "${OFFLINE_LICENSE_CMD}" ]; then
-    # 离线需本地 Python 生成许可证
+if [ -n "${OFFLINE_RESOURCES_DIR}" ] && [ -z "${OFFLINE_LICENSES_DIR}" ] && [ -z "${OFFLINE_LICENSE_CMD}" ]; then
+    # 离线需本地 Python 生成许可证（预生成许可证模式下跳过）
     if command -v python3 >/dev/null 2>&1; then
         OFFLINE_LICENSE_CMD="$(command -v python3)"
     elif command -v python >/dev/null 2>&1; then
@@ -1204,11 +1196,15 @@ main() {
     warning "close_products"
     read -r
 
-    read_license_info
+    if [ -z "${OFFLINE_LICENSES_DIR}" ]; then
+        read_license_info
+    fi
 
     info "processing"
 
-    check_and_install_deps
+    if [ -z "${OFFLINE_RESOURCES_DIR}" ] && [ -z "${OFFLINE_LICENSES_DIR}" ]; then
+        check_and_install_deps
+    fi
 
     if [ ! -d "${dir_config_jb}" ]; then
         error "dir_not_found" "${dir_config_jb}"

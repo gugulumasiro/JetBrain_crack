@@ -7,7 +7,9 @@
 
 ## 项目依赖
 
-- **Python 3.8+**：生成密钥与离线许可证时需要；Windows 安装时建议勾选 “Add python.exe to PATH”
+Python 只在**本仓库所在机器**需要（生成密钥、签发许可证、导出离线脚本）；**导出的单文件离线激活脚本在目标机器上完全无需 Python**，也无需服务器在线。
+
+- **Python 3.8+**（仅本机）：生成密钥、签发许可证与导出离线脚本时需要；Windows 安装时建议勾选 “Add python.exe to PATH”
 - **Python 依赖**：`pip install -r requirements.txt`（实际仅需要 `cryptography`，一键脚本会自动安装）
 - **Windows**：PowerShell 5.1+ 或 CMD，二者均可一键激活（脚本会自动申请管理员权限）
 - **Linux / macOS**：bash
@@ -185,8 +187,8 @@ curl -Ls http://localhost:10768 | bash    # Linux / macOS
 ```
 
 也可以从服务器导出**单文件自包含离线脚本**：每个导出文件都内嵌「激活脚本 + ja-netfilter 资源 +
-许可证生成器 + 已生成的密钥」，下载后即是一个独立文件，运行即自动解压并离线激活，
-**不依赖服务器在线、不依赖仓库配套文件**，适合拷贝到其它机器使用。支持三种格式：
+12 款产品的预生成许可证」，下载后即是一个独立文件，运行即自动解压并离线激活，
+**不依赖服务器在线、不依赖仓库配套文件、目标机器无需 Python**，适合拷贝到其它机器使用。支持三种格式：
 
 ```powershell
 irm  http://localhost:10768/export/activate.ps1 -OutFile activate.ps1                  # Windows PowerShell
@@ -202,6 +204,9 @@ one-click-activate.cmd
 ```
 
 运行导出脚本时，它会先把内嵌的离线包解压到临时目录，设置离线环境变量后执行激活，结束后自动清理临时文件。
+许可证已在导出时按固定身份（许可证名称 `JetBrain`、被授权人为空、有效期至 `2099-12-31`）预先签发，
+激活时脚本直接写入 IDE 配置目录，无需在目标机器生成密钥或填写授权信息。目标机器要求：
+Windows 仅需 PowerShell 5.1+ 或 CMD；Linux / macOS 仅需 bash（自解压还需系统自带 `base64` 与 `unzip`）。
 导出前需已在服务器所在机器生成过 `keys/` 密钥，否则接口会返回 400 提示先生成密钥。
 
 端口冲突处理：启动前会先探测端口占用情况，若占用者是本服务残留实例（命令行含

@@ -215,6 +215,22 @@ def generate_license_key_text(assignee_name, expiry_date, license_name, product_
     return f"{raw_hash}-{b64_json}-{sig_b64}-{cert_b64}"
 
 
+# 预生成许可证的产品清单（名称须与 activate 脚本内的产品标识一致，即 .key 文件名）
+_PREGEN_PRODUCTS = (
+    ("idea", "II,PCWMP,PSI"),
+    ("clion", "CL,PSI,PCWMP"),
+    ("phpstorm", "PS,PCWMP,PSI"),
+    ("goland", "GO,PSI,PCWMP"),
+    ("pycharm", "PC,PSI,PCWMP"),
+    ("webstorm", "WS,PCWMP,PSI"),
+    ("rider", "RD,PDB,PSI,PCWMP"),
+    ("datagrip", "DB,PSI,PDB"),
+    ("rubymine", "RM,PCWMP,PSI"),
+    ("appcode", "AC,PCWMP,PSI"),
+    ("dataspell", "DS,PSI,PDB,PCWMP"),
+    ("rustrover", "RR,PSI,PCWP"),
+)
+
 # ===================== 单文件自包含离线脚本模板 =====================
 # 模板代码中严禁出现完整标记字符串 __JB_OFFLINE_PACK__ / __JB_OFFLINE_END__
 # （bootstrap 需按原字节在自身文件里定位载荷，标记被拆开写入以避免自匹配）。
@@ -273,7 +289,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 # ---------- 2. 以离线模式运行内嵌激活脚本 ----------
 $root = Join-Path $extract 'JetBrain-offline'
 $env:OFFLINE_RESOURCES_DIR = Join-Path $root 'ja-netfilter'
-$env:OFFLINE_LICENSE_SCRIPT = Join-Path $root 'server\generate_license.py'
+$env:OFFLINE_LICENSES_DIR = Join-Path $root 'licenses'
 $inner = Join-Path $root 'scripts\Windows\activate.ps1'
 
 $rc = 0
@@ -312,15 +328,20 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem ---------- 2. 运行内嵌一键激活脚本 ----------
-set "INNER=%TEMP%\jb-offline-export\JetBrain-offline\scripts\Windows\one-click-activate.cmd"
+rem ---------- 2. 运行内嵌激活脚本 ----------
+set "ROOT=%TEMP%\jb-offline-export\JetBrain-offline"
+set "INNER=%ROOT%\scripts\Windows\activate.ps1"
 if not exist "%INNER%" (
     echo [错误] 离线包内容不完整。
     pause
     exit /b 1
 )
-call "%INNER%"
+set "OFFLINE_RESOURCES_DIR=%ROOT%\ja-netfilter"
+set "OFFLINE_LICENSES_DIR=%ROOT%\licenses"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%INNER%"
 set "RC=%errorlevel%"
+set "OFFLINE_RESOURCES_DIR="
+set "OFFLINE_LICENSES_DIR="
 
 rem ---------- 3. 清理临时文件 ----------
 cd /d "%TEMP%"
@@ -331,7 +352,8 @@ exit /b %RC%'''
 
 _SELFEXTRACT_SH = r'''#!/bin/bash
 # Self-extracting offline JetBrains activate script
-# 自解压离线激活脚本（单文件自包含：脚本+资源+密钥全部内嵌，无需服务器、无需仓库配套文件）
+# 自解压离线激活脚本（单文件自包含：脚本+资源+预生成许可证全部内嵌，
+# 目标机器无需 Python、无需服务器、不依赖仓库配套文件）
 
 set -e
 
@@ -339,30 +361,31 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "[错误] 未找到 python3。离线激活需要 Python 3.8+（用于生成许可证）。" >&2
+for cmd in base64 unzip; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "[错误] 未找到 $cmd。离线激活需要 base64 与 unzip。" >&2
+        exit 1
+    fi
+done
+
+m_begin='__JB_OFFLINE_'
+begin="${m_begin}PACK__"
+end="${m_begin}END__"
+sed -n "/^${begin}$/,/^${end}$/p" "$SELF" | sed '1d;$d' > "$TMPDIR/pack.b64"
+
+if base64 --decode < "$TMPDIR/pack.b64" > "$TMPDIR/pack.zip" 2>/dev/null; then
+    :
+elif base64 -D < "$TMPDIR/pack.b64" > "$TMPDIR/pack.zip" 2>/dev/null; then
+    :
+else
+    echo "[错误] 解压内嵌离线包失败。" >&2
     exit 1
 fi
-
-python3 - "$SELF" "$TMPDIR" <<'PYEOF'
-import base64, io, sys, zipfile
-self_path, dest = sys.argv[1], sys.argv[2]
-begin = b'__JB_OFFLINE_' + b'PACK__'
-end = b'__JB_OFFLINE_' + b'END__'
-data = open(self_path, 'rb').read()
-i = data.find(begin)
-j = data.find(end, i)
-if i == -1 or j == -1:
-    sys.stderr.write('[错误] 未找到内嵌离线包，文件可能已损坏。\n')
-    sys.exit(1)
-b64 = data[i + len(begin):j].replace(b'\r', b'').replace(b'\n', b'')
-with zipfile.ZipFile(io.BytesIO(base64.b64decode(b64))) as zf:
-    zf.extractall(dest)
-PYEOF
+unzip -q "$TMPDIR/pack.zip" -d "$TMPDIR"
 
 ROOT="$TMPDIR/JetBrain-offline"
 export OFFLINE_RESOURCES_DIR="$ROOT/ja-netfilter"
-export OFFLINE_LICENSE_SCRIPT="$ROOT/server/generate_license.py"
+export OFFLINE_LICENSES_DIR="$ROOT/licenses"
 
 if [ ! -f "$ROOT/scripts/Linux-macOS/activate.sh" ]; then
     echo "[错误] 离线包内容不完整。" >&2
@@ -487,11 +510,12 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
     _EXPORT_NAMES = ("activate.ps1", "one-click-activate.cmd", "activate.sh")
 
     def _build_offline_pack(self):
-        """构建离线包（内存 zip）：脚本 + ja-netfilter 资源树 + 许可证生成器 + 预生成密钥。
+        """构建离线包（内存 zip）：激活脚本 + ja-netfilter 资源树 + 预生成许可证。
 
-        缺少 keys/ 密钥时返回 None。该 zip 被内嵌进自包含离线导出脚本
-        （activate.ps1 / one-click-activate.cmd / activate.sh），由脚本解压后离线激活，
-        不依赖服务器在线、不依赖仓库配套文件。"""
+        缺少 keys/ 密钥或密钥未加载时返回 None。该 zip 被内嵌进自包含离线导出脚本
+        （activate.ps1 / one-click-activate.cmd / activate.sh），由脚本解压后离线激活。
+        全部 12 个产品的许可证在导出时预生成，目标机器无需 Python、无需服务器、
+        不依赖仓库配套文件，也不再包含私钥。"""
         import zipfile
         from io import BytesIO
 
@@ -501,16 +525,9 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
 
         root = "JetBrain-offline"
         files = [
-            ("scripts/generate_keys.py", f"{root}/scripts/generate_keys.py"),
             ("scripts/Windows/activate.ps1", f"{root}/scripts/Windows/activate.ps1"),
-            ("scripts/Windows/one-click-activate.ps1", f"{root}/scripts/Windows/one-click-activate.ps1"),
-            ("scripts/Windows/one-click-activate.cmd", f"{root}/scripts/Windows/one-click-activate.cmd"),
             ("scripts/Linux-macOS/activate.sh", f"{root}/scripts/Linux-macOS/activate.sh"),
-            ("scripts/Linux-macOS/one-click-activate.sh", f"{root}/scripts/Linux-macOS/one-click-activate.sh"),
-            ("server/local_server.py", f"{root}/server/local_server.py"),
-            ("server/generate_license.py", f"{root}/server/generate_license.py"),
         ]
-        key_files = ["private.pem", "public.pem", "cert.der"]
 
         buf = BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -524,10 +541,13 @@ class JetBrainsHandler(http.server.BaseHTTPRequestHandler):
                         full = os.path.join(dirpath, fn)
                         rel = os.path.relpath(full, JA_NETFILTER_DIR).replace(os.sep, "/")
                         zf.write(full, f"{root}/ja-netfilter/{rel}")
-            for kf in key_files:
-                src = os.path.join(KEYS_DIR, kf)
-                if os.path.isfile(src):
-                    zf.write(src, f"{root}/keys/{kf}")
+            # 预生成全部产品许可证（固定身份：名称 JetBrain / 被授权人空 / 到期 2099-12-31）
+            try:
+                for name, code in _PREGEN_PRODUCTS:
+                    key = generate_license_key("", "2099-12-31", "JetBrain", code)
+                    zf.writestr(f"{root}/licenses/{name}.key", key)
+            except RuntimeError:
+                return None
 
         return buf.getvalue()
 
