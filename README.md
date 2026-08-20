@@ -1,7 +1,18 @@
-# JetBrains IDE离线激活（本地）
+<p align="center">
+  <strong>中文</strong> | <a href="README_EN.md">English</a>
+</p>
 
-基于 ja-netfilter / power.jar 原理的 JetBrains 许可证离线激活。
-许可证由本地 RSA 私钥 + 自签名证书真正签名生成，激活时 IDE 的证书信任链由 power.conf 拦截。
+# JetBrains IDE 离线激活（本地）
+
+基于 ja-netfilter / power.jar 原理的 JetBrains 许可证本地激活方案，**无需互联网、无需在线授权服务器**。
+
+- **真签名许可证**：由本地 RSA-4096 私钥 + 自签名证书对每份许可证真实签名（RSA-SHA1 + PKCS1v15），
+  格式与官方完全一致；激活时 IDE 的证书信任链由 `power.conf` 拦截，`keys/` 私钥不入库。
+- **覆盖 12 款 IDE**：IntelliJ IDEA、PyCharm、PhpStorm、GoLand、CLion、WebStorm、Rider、
+  DataGrip、RubyMine、AppCode、DataSpell、RustRover 全支持。
+- **三种激活方式**：一键脚本（内嵌预生成许可证，目标机器无需 Python）· 交互式脚本（离线或服务器双模式）·
+  单文件自包含离线导出（内嵌全部资源与许可证，拷贝到任意机器即用）。
+- **Web 操作面板**：本地服务器提供浏览器面板，可视化选产品、生成激活码 / `.key` 文件、下载离线导出脚本。
 
 > 仅供学习研究使用，请勿用于商业或侵权用途。
 
